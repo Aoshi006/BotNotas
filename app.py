@@ -952,7 +952,13 @@ if pagina == "📊 Dashboard":
             unsafe_allow_html=True,
         )
     else:
-        for _, row in notas.head(6).iterrows():
+        recentes = notas.sort_values(
+            "data_dt",
+            ascending=False,
+            na_position="last",
+        ).head(6)
+
+        for _, row in recentes.iterrows():
             st.markdown(
                 html_card(
                     titulo=str(row["estabelecimento"]).upper(),
