@@ -370,6 +370,7 @@ def carregar_notas():
     df["data_dt"] = pd.to_datetime(
         df["data_emissao"],
         errors="coerce",
+        format="mixed",
     )
 
     df["estabelecimento"] = (
@@ -460,6 +461,7 @@ def carregar_itens():
     itens_df["data_dt"] = pd.to_datetime(
         itens_df["data_emissao"],
         errors="coerce",
+        format="mixed",
     )
 
     itens_df["estabelecimento"] = (
@@ -703,7 +705,6 @@ def data_curta(valor):
     try:
         dt = pd.to_datetime(
             valor,
-            dayfirst=True,
             errors="coerce",
         )
 
