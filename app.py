@@ -747,6 +747,114 @@ def html_card(
     )
 
 
+def categorizar_produto(nome):
+    texto = normalizar_nome_produto(nome)
+
+    categorias = [
+        (
+            "COMBUSTÍVEL",
+            ["GASOLINA", "ETANOL", "DIESEL", "COMBUSTIVEL"],
+        ),
+        (
+            "HORTIFRUTI",
+            [
+                "MACA", "BANANA", "UVA", "ABACAXI", "TOMATE", "ALFACE",
+                "CEBOLA", "CEBOLINHA", "SALSA", "COUVE", "BATATA",
+                "CENOURA", "MANGA", "LARANJA", "LIMAO", "MELANCIA",
+                "MELAO", "MORANGO", "PERA", "MAMAO", "ABACATE",
+            ],
+        ),
+        (
+            "HIGIENE E BELEZA",
+            [
+                "SABONETE", "SHAMPOO", "CONDICIONADOR", "DESOD",
+                "DESODORANTE", "HIDRATANTE", "PAPEL HIGIENICO",
+                "CREME DENTAL", "ESCOVA", "ABSORVENTE", "FRALDA",
+            ],
+        ),
+        (
+            "LIMPEZA",
+            [
+                "DETERGENTE", "SABAO", "AMACIANTE", "DESINFETANTE",
+                "AGUA SANITARIA", "LIMPADOR", "ESPONJA", "ALCOOL",
+            ],
+        ),
+        (
+            "BEBIDAS",
+            [
+                "REFRIGERANTE", "SUCO", "AGUA ", "CAFE", "CHA ",
+                "ACHOCOLATADO",
+            ],
+        ),
+        (
+            "SAÚDE",
+            [
+                "SIMETICONA", "DIPIRONA", "PARACETAMOL", "MEDIC",
+                "VITAMINA", "SORO", "POMADA",
+            ],
+        ),
+        (
+            "ALIMENTOS",
+            [
+                "LEITE", "ARROZ", "FEIJAO", "MACARRAO", "BISCOITO",
+                "PAO", "QUEIJO", "PRESUNTO", "IOGURTE", "MANTEIGA",
+                "MARGARINA", "OVO", "FRANGO", "CARNE", "COXA", "PEITO",
+                "FARINHA", "ACUCAR", "SAL ", "OLEO", "SUPRA SOY",
+            ],
+        ),
+    ]
+
+    for categoria, palavras in categorias:
+        if any(palavra in texto for palavra in palavras):
+            return categoria
+
+    return "OUTROS"
+
+
+def calcular_variacoes_produtos(df):
+    if df.empty:
+        return pd.DataFrame()
+
+    base = (
+        df.dropna(subset=["data_dt", "preco_unitario"])
+        .sort_values(["produto_canonico", "data_dt"])
+        .copy()
+    )
+
+    registros = []
+
+    for produto, grupo in base.groupby("produto_canonico"):
+        grupo = grupo.sort_values("data_dt")
+
+        if len(grupo) < 2:
+            continue
+
+        anterior = grupo.iloc[-2]
+        atual = grupo.iloc[-1]
+
+        preco_anterior = float(anterior["preco_unitario"])
+        preco_atual = float(atual["preco_unitario"])
+
+        if preco_anterior <= 0:
+            continue
+
+        variacao = ((preco_atual - preco_anterior) / preco_anterior) * 100
+
+        registros.append(
+            {
+                "produto": produto,
+                "preco_anterior": preco_anterior,
+                "preco_atual": preco_atual,
+                "variacao": variacao,
+                "data_anterior": anterior["data_dt"],
+                "data_atual": atual["data_dt"],
+                "estabelecimento": atual["estabelecimento"],
+            }
+        )
+
+    return pd.DataFrame(registros)
+
+
 def paginação(total, prefixo, por_pagina=8):
     if total <= por_pagina:
         return 0, total
@@ -891,6 +999,7 @@ pagina = st.sidebar.radio(
         "🧾 Compras",
         "📦 Produtos",
         "📈 Preços",
+        "📊 Insights",
         "💸 Onde está mais barato",
         "🧠 Produtos inteligentes",
         "🏪 Estabelecimentos",
@@ -1364,6 +1473,273 @@ elif pagina == "📈 Preços":
                     ),
                     unsafe_allow_html=True,
                 )
+
+
+# ============================================================
+# INSIGHTS
+# ============================================================
+
+elif pagina == "📊 Insights":
+    st.header("📊 Insights")
+    st.caption(
+        "Resumo automático do seu histórico de compras e preços."
+    )
+
+    historico_itens = itens_completos.copy()
+    historico_notas = notas_completas.copy()
+
+    # --------------------------------------------------------
+    # MÊS MAIS RECENTE X MÊS ANTERIOR
+    # --------------------------------------------------------
+    st.subheader("📅 Mês atual x mês anterior")
+
+    notas_validas = historico_notas.dropna(
+        subset=["data_dt"]
+    ).copy()
+
+    if not notas_validas.empty:
+        notas_validas["periodo"] = notas_validas["data_dt"].dt.to_period("M")
+        periodos = sorted(
+            notas_validas["periodo"].unique().tolist()
+        )
+
+        periodo_atual = periodos[-1]
+        periodo_anterior = periodos[-2] if len(periodos) > 1 else None
+
+        gasto_atual = notas_validas.loc[
+            notas_validas["periodo"] == periodo_atual,
+            "valor_total",
+        ].fillna(0).sum()
+
+        compras_atual = int(
+            (notas_validas["periodo"] == periodo_atual).sum()
+        )
+
+        c1, c2 = st.columns(2)
+        c1.metric(
+            f"💰 {rotulo_periodo(periodo_atual)}",
+            moeda(gasto_atual),
+        )
+        c2.metric(
+            "🧾 Compras no mês",
+            compras_atual,
+        )
+
+        if periodo_anterior is not None:
+            gasto_anterior = notas_validas.loc[
+                notas_validas["periodo"] == periodo_anterior,
+                "valor_total",
+            ].fillna(0).sum()
+
+            diferenca = gasto_atual - gasto_anterior
+            percentual = (
+                (diferenca / gasto_anterior) * 100
+                if gasto_anterior > 0
+                else 0
+            )
+
+            c3, c4 = st.columns(2)
+            c3.metric(
+                f"💳 {rotulo_periodo(periodo_anterior)}",
+                moeda(gasto_anterior),
+            )
+            c4.metric(
+                "📊 Diferença",
+                moeda(diferenca),
+                delta=f"{percentual:+.1f}%",
+            )
+    else:
+        st.info("Ainda não há datas suficientes para comparar meses.")
+
+    # --------------------------------------------------------
+    # MAIORES ALTAS E QUEDAS
+    # --------------------------------------------------------
+    st.divider()
+    st.subheader("📈 Maiores altas e quedas")
+
+    variacoes = calcular_variacoes_produtos(historico_itens)
+
+    if variacoes.empty:
+        st.info(
+            "Ainda não há produtos repetidos suficientes para calcular variações."
+        )
+    else:
+        altas = variacoes[
+            variacoes["variacao"] > 0
+        ].sort_values("variacao", ascending=False).head(5)
+
+        quedas = variacoes[
+            variacoes["variacao"] < 0
+        ].sort_values("variacao").head(5)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("#### 🔺 Maiores altas")
+            if altas.empty:
+                st.caption("Nenhuma alta registrada.")
+            else:
+                for _, row in altas.iterrows():
+                    st.markdown(
+                        html_card(
+                            titulo=str(row["produto"]).upper(),
+                            preco=f"{row['variacao']:+.1f}%",
+                            subtitulo=(
+                                f"{moeda(row['preco_anterior'])} → "
+                                f"{moeda(row['preco_atual'])}"
+                            ),
+                            chips=[
+                                (
+                                    str(row["estabelecimento"]).upper(),
+                                    "chip-orange",
+                                ),
+                            ],
+                        ),
+                        unsafe_allow_html=True,
+                    )
+
+        with col2:
+            st.markdown("#### 🔻 Maiores quedas")
+            if quedas.empty:
+                st.caption("Nenhuma queda registrada.")
+            else:
+                for _, row in quedas.iterrows():
+                    st.markdown(
+                        html_card(
+                            titulo=str(row["produto"]).upper(),
+                            preco=f"{row['variacao']:+.1f}%",
+                            subtitulo=(
+                                f"{moeda(row['preco_anterior'])} → "
+                                f"{moeda(row['preco_atual'])}"
+                            ),
+                            chips=[
+                                (
+                                    str(row["estabelecimento"]).upper(),
+                                    "chip-green",
+                                ),
+                            ],
+                        ),
+                        unsafe_allow_html=True,
+                    )
+
+    # --------------------------------------------------------
+    # PRODUTOS MAIS COMPRADOS
+    # --------------------------------------------------------
+    st.divider()
+    st.subheader("🛒 Produtos mais comprados")
+
+    if historico_itens.empty:
+        st.info("Ainda não há itens suficientes.")
+    else:
+        frequentes = (
+            historico_itens.groupby(
+                "produto_canonico",
+                as_index=False,
+            )
+            .agg(
+                compras=("nota_id", "nunique"),
+                quantidade=("quantidade", "sum"),
+                gasto=("valor_total", "sum"),
+            )
+            .sort_values(
+                ["compras", "quantidade"],
+                ascending=[False, False],
+            )
+            .head(10)
+        )
+
+        fig_freq = px.bar(
+            frequentes,
+            x="produto_canonico",
+            y="compras",
+            text_auto=True,
+        )
+
+        fig_freq.update_layout(
+            xaxis_title="",
+            yaxis_title="Compras",
+            showlegend=False,
+        )
+
+        st.plotly_chart(
+            plot_layout(fig_freq, 380),
+            use_container_width=True,
+        )
+
+        for _, row in frequentes.iterrows():
+            st.markdown(
+                html_card(
+                    titulo=str(row["produto_canonico"]).upper(),
+                    preco=f"{int(row['compras'])} compra(s)",
+                    subtitulo=f"Gasto registrado: {moeda(row['gasto'])}",
+                    chips=[
+                        (
+                            f"Qtd. total {numero(row['quantidade'])}",
+                            "chip-purple",
+                        ),
+                    ],
+                ),
+                unsafe_allow_html=True,
+            )
+
+    # --------------------------------------------------------
+    # GASTOS POR CATEGORIA
+    # --------------------------------------------------------
+    st.divider()
+    st.subheader("🧺 Gastos por categoria")
+    st.caption(
+        "As categorias são automáticas, baseadas no nome dos produtos."
+    )
+
+    if historico_itens.empty:
+        st.info("Ainda não há itens para categorizar.")
+    else:
+        categorias = historico_itens.copy()
+        categorias["categoria"] = categorias[
+            "produto_canonico"
+        ].apply(categorizar_produto)
+
+        resumo_cat = (
+            categorias.groupby(
+                "categoria",
+                as_index=False,
+            )["valor_total"]
+            .sum()
+            .sort_values(
+                "valor_total",
+                ascending=False,
+            )
+        )
+
+        fig_cat = px.pie(
+            resumo_cat,
+            names="categoria",
+            values="valor_total",
+            hole=0.48,
+        )
+
+        fig_cat.update_traces(
+            textposition="inside",
+            textinfo="percent",
+        )
+
+        fig_cat.update_layout(
+            legend_title="",
+        )
+
+        st.plotly_chart(
+            plot_layout(fig_cat, 430),
+            use_container_width=True,
+        )
+
+        for _, row in resumo_cat.iterrows():
+            st.markdown(
+                html_card(
+                    titulo=row["categoria"],
+                    preco=moeda(row["valor_total"]),
+                ),
+                unsafe_allow_html=True,
+            )
 
 
 # ============================================================
