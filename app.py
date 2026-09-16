@@ -855,6 +855,287 @@ def calcular_variacoes_produtos(df):
     return pd.DataFrame(registros)
 
 
+def resumo_preco_medio(df):
+    if df.empty:
+        return pd.DataFrame()
+
+    base = (
+        df.dropna(subset=["data_dt", "preco_unitario"])
+        .sort_values(["produto_canonico", "data_dt"])
+        .copy()
+    )
+
+    registros = []
+
+    for produto, grupo in base.groupby("produto_canonico"):
+        if grupo.empty:
+            continue
+
+        ultimo = grupo.iloc[-1]
+        media = float(grupo["preco_unitario"].mean())
+        ultimo_preco = float(ultimo["preco_unitario"])
+
+        diferenca_pct = (
+            ((ultimo_preco - media) / media) * 100
+            if media > 0 else 0
+        )
+
+        registros.append(
+            {
+                "produto": produto,
+                "media": media,
+                "ultimo": ultimo_preco,
+                "diferenca_pct": diferenca_pct,
+                "estabelecimento": ultimo["estabelecimento"],
+                "data": ultimo["data_dt"],
+            }
+        )
+
+    return pd.DataFrame(registros)
+
+
+def melhor_momento_compra(df):
+    if df.empty:
+        return pd.DataFrame()
+
+    base = df.dropna(
+        subset=["data_dt", "preco_unitario"]
+    ).copy()
+
+    if base.empty:
+        return pd.DataFrame()
+
+    base["periodo"] = base["data_dt"].dt.to_period("M")
+    base["mes_num"] = base["data_dt"].dt.month
+
+    agrupado = (
+        base.groupby(
+            ["produto_canonico", "periodo", "mes_num"],
+            as_index=False,
+        )["preco_unitario"]
+        .mean()
+    )
+
+    registros = []
+
+    for produto, grupo in agrupado.groupby("produto_canonico"):
+        if len(grupo) < 2:
+            continue
+
+        melhor = grupo.loc[
+            grupo["preco_unitario"].idxmin()
+        ]
+
+        media_geral = float(grupo["preco_unitario"].mean())
+        melhor_preco = float(melhor["preco_unitario"])
+
+        vantagem = (
+            ((media_geral - melhor_preco) / media_geral) * 100
+            if media_geral > 0 else 0
+        )
+
+        registros.append(
+            {
+                "produto": produto,
+                "periodo": melhor["periodo"],
+                "mes_num": int(melhor["mes_num"]),
+                "melhor_preco": melhor_preco,
+                "media": media_geral,
+                "vantagem": vantagem,
+            }
+        )
+
+    return pd.DataFrame(registros)
+
+
+def lojas_por_categoria(df):
+    if df.empty:
+        return pd.DataFrame()
+
+    base = df.dropna(
+        subset=["preco_unitario", "estabelecimento"]
+    ).copy()
+
+    if base.empty:
+        return pd.DataFrame()
+
+    base["categoria"] = base["produto_canonico"].apply(
+        categorizar_produto
+    )
+
+    agrupado = (
+        base.groupby(
+            ["categoria", "estabelecimento"],
+            as_index=False,
+        )
+        .agg(
+            preco_medio=("preco_unitario", "mean"),
+            registros=("id", "count"),
+        )
+    )
+
+    registros = []
+
+    for categoria, grupo in agrupado.groupby("categoria"):
+        grupo = grupo[grupo["registros"] >= 1]
+        if grupo.empty:
+            continue
+
+        melhor = grupo.loc[
+            grupo["preco_medio"].idxmin()
+        ]
+
+        registros.append(
+            {
+                "categoria": categoria,
+                "estabelecimento": melhor["estabelecimento"],
+                "preco_medio": float(melhor["preco_medio"]),
+                "registros": int(melhor["registros"]),
+            }
+        )
+
+    return pd.DataFrame(registros)
+
+
+def compras_recorrentes(df):
+    if df.empty:
+        return pd.DataFrame()
+
+    base = df.dropna(
+        subset=["data_dt"]
+    ).copy()
+
+    registros = []
+
+    for produto, grupo in base.groupby("produto_canonico"):
+        datas = sorted(
+            pd.Series(grupo["data_dt"].dt.normalize().unique())
+        )
+
+        if len(datas) < 2:
+            continue
+
+        intervalos = [
+            (datas[i] - datas[i - 1]).days
+            for i in range(1, len(datas))
+            if (datas[i] - datas[i - 1]).days > 0
+        ]
+
+        if not intervalos:
+            continue
+
+        intervalo_medio = sum(intervalos) / len(intervalos)
+        ultima_data = datas[-1]
+        proxima_estimativa = (
+            ultima_data + pd.Timedelta(days=round(intervalo_medio))
+        )
+
+        registros.append(
+            {
+                "produto": produto,
+                "compras": len(datas),
+                "intervalo_medio": intervalo_medio,
+                "ultima_data": ultima_data,
+                "proxima_estimativa": proxima_estimativa,
+            }
+        )
+
+    return pd.DataFrame(registros)
+
+
+def inflacao_pessoal(df):
+    if df.empty:
+        return pd.DataFrame()
+
+    base = df.dropna(
+        subset=["data_dt", "preco_unitario"]
+    ).copy()
+
+    if base.empty:
+        return pd.DataFrame()
+
+    base["periodo"] = base["data_dt"].dt.to_period("M")
+
+    # Cesta fixa: produtos que aparecem em pelo menos dois meses.
+    presenca = (
+        base.groupby("produto_canonico")["periodo"]
+        .nunique()
+    )
+    elegiveis = presenca[presenca >= 2].index.tolist()
+
+    if not elegiveis:
+        return pd.DataFrame()
+
+    base = base[
+        base["produto_canonico"].isin(elegiveis)
+    ].copy()
+
+    mensal_produto = (
+        base.groupby(
+            ["periodo", "produto_canonico"],
+            as_index=False,
+        )["preco_unitario"]
+        .mean()
+    )
+
+    periodos = sorted(
+        mensal_produto["periodo"].unique().tolist()
+    )
+
+    if len(periodos) < 2:
+        return pd.DataFrame()
+
+    # Índice simples: média dos relativos de preço contra o primeiro
+    # mês em que cada produto aparece.
+    referencia = (
+        mensal_produto.sort_values("periodo")
+        .groupby("produto_canonico", as_index=False)
+        .first()[["produto_canonico", "preco_unitario"]]
+        .rename(columns={"preco_unitario": "preco_base"})
+    )
+
+    calc = mensal_produto.merge(
+        referencia,
+        on="produto_canonico",
+        how="left",
+    )
+
+    calc = calc[
+        (calc["preco_base"] > 0)
+        & calc["preco_unitario"].notna()
+    ].copy()
+
+    calc["indice_relativo"] = (
+        calc["preco_unitario"] / calc["preco_base"]
+    ) * 100
+
+    indice = (
+        calc.groupby("periodo", as_index=False)
+        .agg(
+            indice=("indice_relativo", "mean"),
+            produtos=("produto_canonico", "nunique"),
+        )
+        .sort_values("periodo")
+    )
+
+    if indice.empty:
+        return pd.DataFrame()
+
+    indice_base = float(indice.iloc[0]["indice"])
+    if indice_base == 0:
+        return pd.DataFrame()
+
+    indice["indice"] = (
+        indice["indice"] / indice_base
+    ) * 100
+
+    indice["variacao_acumulada"] = (
+        indice["indice"] - 100
+    )
+
+    return indice
+
+
 def paginação(total, prefixo, por_pagina=8):
     if total <= por_pagina:
         return 0, total
@@ -1740,6 +2021,222 @@ elif pagina == "📊 Insights":
                 ),
                 unsafe_allow_html=True,
             )
+
+
+    # --------------------------------------------------------
+    # PREÇO MÉDIO X ÚLTIMO PREÇO
+    # --------------------------------------------------------
+    st.divider()
+    st.subheader("💵 Último preço x média histórica")
+
+    preco_medio = resumo_preco_medio(historico_itens)
+
+    if preco_medio.empty:
+        st.info("Ainda não há histórico suficiente para comparar médias.")
+    else:
+        preco_medio = preco_medio.reindex(
+            preco_medio["diferenca_pct"].abs()
+            .sort_values(ascending=False)
+            .index
+        ).head(10)
+
+        for _, row in preco_medio.iterrows():
+            situacao = (
+                "acima da média"
+                if row["diferenca_pct"] > 0
+                else "abaixo da média"
+            )
+
+            classe = (
+                "chip-orange"
+                if row["diferenca_pct"] > 0
+                else "chip-green"
+            )
+
+            st.markdown(
+                html_card(
+                    titulo=str(row["produto"]).upper(),
+                    preco=moeda(row["ultimo"]),
+                    subtitulo=(
+                        f"Média histórica: {moeda(row['media'])}"
+                    ),
+                    chips=[
+                        (
+                            f"{row['diferenca_pct']:+.1f}% {situacao}",
+                            classe,
+                        ),
+                        (
+                            str(row["estabelecimento"]).upper(),
+                            "",
+                        ),
+                    ],
+                ),
+                unsafe_allow_html=True,
+            )
+
+    # --------------------------------------------------------
+    # MELHOR MOMENTO DE COMPRA
+    # --------------------------------------------------------
+    st.divider()
+    st.subheader("🗓️ Melhor momento de compra")
+    st.caption(
+        "Mostra o mês em que cada produto teve o menor preço médio no seu histórico."
+    )
+
+    momentos = melhor_momento_compra(historico_itens)
+
+    if momentos.empty:
+        st.info(
+            "Ainda não há meses repetidos suficientes para calcular o melhor momento."
+        )
+    else:
+        momentos = momentos.sort_values(
+            ["vantagem", "produto"],
+            ascending=[False, True],
+        ).head(12)
+
+        for _, row in momentos.iterrows():
+            periodo_txt = rotulo_periodo(row["periodo"])
+
+            st.markdown(
+                html_card(
+                    titulo=str(row["produto"]).upper(),
+                    preco=periodo_txt,
+                    subtitulo=(
+                        f"Melhor média: {moeda(row['melhor_preco'])} • "
+                        f"Média geral: {moeda(row['media'])}"
+                    ),
+                    chips=[
+                        (
+                            f"{row['vantagem']:.1f}% abaixo da média",
+                            "chip-green",
+                        ),
+                    ],
+                ),
+                unsafe_allow_html=True,
+            )
+
+    # --------------------------------------------------------
+    # LOJA MAIS BARATA POR CATEGORIA
+    # --------------------------------------------------------
+    st.divider()
+    st.subheader("🏪 Loja mais barata por categoria")
+
+    lojas_cat = lojas_por_categoria(historico_itens)
+
+    if lojas_cat.empty:
+        st.info("Ainda não há dados suficientes por categoria.")
+    else:
+        for _, row in lojas_cat.sort_values("categoria").iterrows():
+            st.markdown(
+                html_card(
+                    titulo=row["categoria"],
+                    preco=str(row["estabelecimento"]).upper(),
+                    subtitulo=(
+                        f"Preço médio dos itens: {moeda(row['preco_medio'])}"
+                    ),
+                    chips=[
+                        (
+                            f"{int(row['registros'])} registro(s)",
+                            "chip-purple",
+                        ),
+                    ],
+                ),
+                unsafe_allow_html=True,
+            )
+
+    # --------------------------------------------------------
+    # COMPRAS RECORRENTES
+    # --------------------------------------------------------
+    st.divider()
+    st.subheader("🔁 Compras recorrentes")
+
+    recorrentes = compras_recorrentes(historico_itens)
+
+    if recorrentes.empty:
+        st.info(
+            "Ainda não há produtos comprados em datas diferentes o bastante para estimar recorrência."
+        )
+    else:
+        recorrentes = recorrentes.sort_values(
+            ["compras", "intervalo_medio"],
+            ascending=[False, True],
+        ).head(12)
+
+        for _, row in recorrentes.iterrows():
+            intervalo = round(float(row["intervalo_medio"]))
+
+            st.markdown(
+                html_card(
+                    titulo=str(row["produto"]).upper(),
+                    preco=f"~{intervalo} dias",
+                    subtitulo=(
+                        f"Última compra: "
+                        f"{pd.Timestamp(row['ultima_data']).strftime('%d/%m/%Y')} • "
+                        f"Próxima estimada: "
+                        f"{pd.Timestamp(row['proxima_estimativa']).strftime('%d/%m/%Y')}"
+                    ),
+                    chips=[
+                        (
+                            f"{int(row['compras'])} compras",
+                            "chip-purple",
+                        ),
+                    ],
+                ),
+                unsafe_allow_html=True,
+            )
+
+    # --------------------------------------------------------
+    # INFLAÇÃO PESSOAL
+    # --------------------------------------------------------
+    st.divider()
+    st.subheader("📈 Inflação pessoal")
+    st.caption(
+        "Índice aproximado baseado nos preços dos produtos que se repetem no seu próprio histórico."
+    )
+
+    inflacao = inflacao_pessoal(historico_itens)
+
+    if inflacao.empty or len(inflacao) < 2:
+        st.info(
+            "Ainda não há produtos recorrentes em meses suficientes para calcular sua inflação pessoal."
+        )
+    else:
+        inflacao = inflacao.copy()
+        inflacao["mes"] = inflacao["periodo"].apply(
+            rotulo_periodo
+        )
+
+        atual = float(
+            inflacao.iloc[-1]["variacao_acumulada"]
+        )
+
+        st.metric(
+            "🧮 Variação acumulada da sua cesta",
+            f"{atual:+.1f}%",
+        )
+
+        fig_inf = px.line(
+            inflacao,
+            x="mes",
+            y="indice",
+            markers=True,
+        )
+
+        fig_inf.update_layout(
+            xaxis_title="",
+            yaxis_title="Índice",
+            showlegend=False,
+        )
+
+        st.plotly_chart(
+            plot_layout(fig_inf, 340),
+            use_container_width=True,
+        )
+
+        st.caption(
+            "Base 100 = primeiro mês disponível para os produtos recorrentes."
+        )
 
 
 # ============================================================
