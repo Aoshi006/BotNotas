@@ -1,12 +1,12 @@
 {
-  "name": "BotNotas",
-  "short_name": "BotNotas",
-  "description": "Controle pessoal de compras, notas fiscais e preços.",
+  "name": "Prisma",
+  "short_name": "Prisma",
+  "description": "Assistente pessoal de compras, produtos, preços e veículo.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#0b1020",
-  "theme_color": "#0b1020",
+  "background_color": "#060a12",
+  "theme_color": "#07101d",
   "orientation": "portrait-primary",
   "icons": [
     {
