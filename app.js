@@ -42,7 +42,6 @@ const state = {
   moreSearch: "",
   moreNoteId: null,
   notificationDismissals: new Set(),
-  barcodeBusy: false,
   expandedMaintenanceId: null,
   expandedFuelingId: null,
   expandedReminderId: null,
@@ -229,14 +228,6 @@ finalPolishStyle.id = "prisma-final-polish-styles";
 finalPolishStyle.textContent = `
   .products-toolbar{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:10px}
   .products-toolbar .search{margin:0;flex:1}
-  .scan-small{min-height:42px;border-radius:13px;border:1px solid rgba(32,224,209,.2);background:rgba(32,224,209,.075);color:#50e7dc;padding:0 12px;font-size:9px;font-weight:950;white-space:nowrap}
-  .global-scan-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
-  .global-scan-actions .full{grid-column:1/-1}
-  .barcode-existing{font-size:9px;color:#9eb1c7;margin-top:6px}
-  .barcode-fallback{margin-top:10px;border-top:1px solid rgba(255,255,255,.06);padding-top:10px}
-  .barcode-fallback summary{cursor:pointer;color:#8195ad;font-size:8px;font-weight:800}
-  .barcode-fallback .vehicle-form{margin-top:8px}
-  @media(max-width:520px){.products-toolbar{align-items:stretch}.scan-small{padding:0 10px}}
 `;
 document.head.appendChild(finalPolishStyle);
 
@@ -262,18 +253,7 @@ finalFeatureStyle.textContent = `
   .fusion-card{border:1px solid rgba(255,255,255,.08);background:#0d1728;border-radius:14px;padding:11px}
   .fusion-title{font-size:10px;font-weight:950}
   .fusion-meta{font-size:8px;color:#90a4bd;margin-top:4px;line-height:1.4}
-  .barcode-overlay{position:fixed;inset:0;z-index:70;background:rgba(3,8,16,.92);display:flex;align-items:center;justify-content:center;padding:18px}
-  .barcode-panel{width:min(520px,100%);max-height:92vh;overflow:auto;background:#0c1627;border:1px solid rgba(168,192,226,.14);border-radius:24px;padding:16px;box-shadow:0 26px 90px rgba(0,0,0,.5)}
-  .barcode-video{width:100%;aspect-ratio:4/3;object-fit:cover;background:#050b13;border-radius:18px;margin-top:10px}
-  .barcode-head{display:flex;justify-content:space-between;gap:12px;align-items:center}
-  .barcode-head b{font-size:14px}
-  .barcode-result{border:1px solid rgba(32,224,209,.15);background:rgba(32,224,209,.05);border-radius:16px;padding:11px;margin-top:10px}
-  .barcode-product{display:grid;grid-template-columns:70px 1fr;gap:10px;align-items:center}
-  .barcode-product img{width:70px;height:70px;object-fit:contain;border-radius:12px;background:#fff}
-  .barcode-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
-  .barcode-note{font-size:9px;color:#91a5bd;line-height:1.45;margin-top:8px}
-  .barcode-code{font-family:monospace;font-size:13px;font-weight:900;letter-spacing:.6px}
-  @media(max-width:520px){.fusion-grid,.barcode-actions{grid-template-columns:1fr}}
+  @media(max-width:520px){.fusion-grid{grid-template-columns:1fr}}
 `;
 document.head.appendChild(finalFeatureStyle);
 
@@ -1560,8 +1540,7 @@ function products(){
   return `
     <div class="products-toolbar">
       <input id="product-search" class="search" placeholder="🔎 Buscar produtos, marcas ou categorias">
-      <button class="scan-small" id="global-barcode-scan">📷 Escanear</button>
-    </div>
+</div>
     <div class="filter-row">${cats.map(c=>`<button class="filter-chip ${state.productFilter===c?"active":""}" data-filter="${c}">${c}</button>`).join("")}</div>
     <div id="products-grid" class="product-grid">${visible.map(productCard).join("")}</div>`;
 }
@@ -3265,7 +3244,6 @@ function bindView(){
     updateFlex();
   }
 
-  document.querySelector("#global-barcode-scan")?.addEventListener("click",openGlobalBarcodeScanner);
 }
 
 function updateFlex(){
@@ -3278,429 +3256,6 @@ function updateFlex(){
 }
 
 
-
-function productByBarcode(code){
-  const clean=normalizeBarcode(code);
-  if(!clean) return null;
-  return state.products.find(p=>normalizeBarcode(p.barcode)===clean) || null;
-}
-
-async function addProductToListQuiet(product){
-  if(!state.activeList){
-    const err=await loadShoppingList();
-    if(err){alert("Não foi possível preparar a Lista: "+err);return false;}
-    state.listLoaded=true;
-  }
-
-  const existing=state.listItems.find(i=>searchNorm(i.produto)===searchNorm(product.name));
-  if(existing){
-    if(!isKg(existing.unidade)){
-      await updateListItem(existing.id,{quantidade:num(existing.quantidade||1)+1},false);
-    }
-    await loadShoppingList();
-    return true;
-  }
-
-  const {error}=await supabase.from("lista_itens").insert({
-    lista_id:state.activeList.id,
-    produto:product.name,
-    unidade:product.unit||null,
-    quantidade:1,
-    peso_kg:null,
-    preco_previsto:product.price||null,
-    preco_atual:null,
-    no_carrinho:false
-  });
-  if(error){alert("Não foi possível adicionar à lista: "+error.message);return false;}
-  await loadShoppingList();
-  return true;
-}
-
-async function copyBarcodeImageToStorage(name, imageUrl){
-  if(!imageUrl) return "";
-  let finalUrl=imageUrl;
-  try{
-    const res=await fetch(imageUrl);
-    if(res.ok){
-      const blob=await res.blob();
-      const ext=(blob.type.split("/")[1]||"jpg").replace(/[^a-z0-9]/gi,"")||"jpg";
-      const path=`${state.session.user.id}/${slugifyProductName(name)}-barcode-${Date.now()}.${ext}`;
-      const upload=await supabase.storage.from("produtos").upload(path,blob,{upsert:false,cacheControl:"3600",contentType:blob.type||"image/jpeg"});
-      if(!upload.error){
-        finalUrl=supabase.storage.from("produtos").getPublicUrl(path).data?.publicUrl || finalUrl;
-      }
-    }
-  }catch(err){console.warn("barcode image copy",err);}
-  return finalUrl;
-}
-
-async function createProductFromBarcode(code, match){
-  const clean=normalizeBarcode(code);
-  const name=norm(match?.name) || `PRODUTO ${clean}`;
-  const imageUrl=match?.image ? await copyBarcodeImageToStorage(name,match.image) : "";
-  const payload={
-    user_id:state.session.user.id,
-    nome:name,
-    categoria:categoryFor(name),
-    unidade_padrao:null,
-    imagem_url:imageUrl||null,
-    codigo_barras:clean,
-    monitorar_reposicao:true,
-    familia_reposicao:null,
-    atualizado_em:new Date().toISOString()
-  };
-  const {data,error}=await supabase.from("produtos")
-    .insert(payload)
-    .select("id,user_id,nome,categoria,unidade_padrao,imagem_url,codigo_barras,monitorar_reposicao,familia_reposicao")
-    .single();
-  if(error){
-    if(String(error.message||"").toLowerCase().includes("duplicate")){
-      const existing=state.productRows.find(r=>searchNorm(r.nome)===searchNorm(name));
-      if(existing){
-        const product=state.products.find(p=>String(p.id)===String(existing.id)) || state.products.find(p=>searchNorm(p.name)===searchNorm(name));
-        return product||null;
-      }
-    }
-    throw error;
-  }
-  state.productRows.push(data);
-  buildProducts();
-  return state.products.find(p=>String(p.id)===String(data.id)) || state.products.find(p=>searchNorm(p.name)===searchNorm(name)) || null;
-}
-
-function globalBarcodeResultHtml(code,match,existing){
-  const p=existing;
-  const image=p?.imageUrl || match?.image || "";
-  const title=p?.name || match?.name || "Produto não identificado";
-  const meta=[];
-  if(p){
-    if(p.price>0) meta.push(`Último ${money(p.price)}${p.unit?.toUpperCase()==="KG"?"/kg":""}`);
-    if(p.avg>0) meta.push(`média ${money(p.avg)}`);
-    if(p.latestStore) meta.push(p.latestStore);
-  }else{
-    if(match?.brands) meta.push(match.brands);
-    if(match?.quantity) meta.push(match.quantity);
-    if(match?.source) meta.push(match.source);
-  }
-  return `<div class="barcode-result">
-    <div class="barcode-product">${image?`<img src="${escapeHtml(image)}" alt="Produto">`:`<div class="sheet-photo">📦</div>`}<div><div class="barcode-code">${escapeHtml(code)}</div><div class="notification-title">${escapeHtml(title)}</div><div class="notification-text">${escapeHtml(meta.join(" • ")||"Código lido com sucesso")}</div>${p?`<div class="barcode-existing">✓ Já está na sua biblioteca</div>`:""}</div></div>
-    <div class="global-scan-actions">
-      ${p?`<button class="primary" id="global-add-list">🛒 Adicionar à lista</button><button class="secondary" id="global-open-product">Abrir produto</button>`:`<button class="primary full" id="global-add-prisma">＋ Adicionar ao Prisma</button>`}
-      <button class="secondary full" id="global-scan-again">📷 Escanear outro</button>
-    </div>
-  </div>`;
-}
-
-async function showGlobalBarcodeMatch(code,overlay){
-  const result=overlay.querySelector("#barcode-result");
-  result.innerHTML=`<div class="loading">Consultando código ${escapeHtml(code)}…</div>`;
-
-  let existing=productByBarcode(code);
-  let match=null;
-  if(!existing){
-    match=await lookupBarcodeOnline(code);
-    if(match?.name){
-      const sameName=state.products.find(p=>searchNorm(p.name)===searchNorm(match.name));
-      if(sameName) existing=sameName;
-    }
-  }
-
-  result.innerHTML=globalBarcodeResultHtml(code,match,existing);
-
-  result.querySelector("#global-add-list")?.addEventListener("click",async()=>{
-    const ok=await addProductToListQuiet(existing);
-    if(ok){
-      const btn=result.querySelector("#global-add-list");
-      if(btn){btn.textContent="✓ Adicionado à lista";btn.disabled=true;}
-    }
-  });
-
-  result.querySelector("#global-open-product")?.addEventListener("click",()=>{
-    closeBarcodeOverlay();
-    openProduct(existing);
-  });
-
-  result.querySelector("#global-add-prisma")?.addEventListener("click",async()=>{
-    if(!match?.name){
-      alert("O código foi lido, mas não encontrei dados suficientes para criar o produto automaticamente.");
-      return;
-    }
-    try{
-      const created=await createProductFromBarcode(code,match);
-      if(!created) throw new Error("Produto não disponível após o cadastro.");
-      result.innerHTML=globalBarcodeResultHtml(code,match,created);
-      const listBtn=result.querySelector("#global-add-list");
-      if(listBtn) listBtn.addEventListener("click",async()=>{
-        const ok=await addProductToListQuiet(created);
-        if(ok){listBtn.textContent="✓ Adicionado à lista";listBtn.disabled=true;}
-      });
-      result.querySelector("#global-open-product")?.addEventListener("click",()=>{closeBarcodeOverlay();openProduct(created);});
-      result.querySelector("#global-scan-again")?.addEventListener("click",()=>{closeBarcodeOverlay();openGlobalBarcodeScanner();});
-    }catch(err){alert("Não foi possível adicionar ao Prisma: "+(err?.message||String(err)));}
-  });
-
-  result.querySelector("#global-scan-again")?.addEventListener("click",()=>{closeBarcodeOverlay();openGlobalBarcodeScanner();});
-}
-
-async function openGlobalBarcodeScanner(){
-  if(state.barcodeBusy) return;
-  state.barcodeBusy=true;
-  const overlay=document.createElement("div");
-  overlay.className="barcode-overlay";
-  overlay.id="barcode-overlay";
-  overlay.innerHTML=`<div class="barcode-panel">
-    <div class="barcode-head"><div><b>📷 Escanear produto</b><div class="notification-text">Aponte a câmera para o código de barras.</div></div><button class="sheet-close" id="barcode-close">✕</button></div>
-    <video class="barcode-video" id="barcode-video" playsinline muted></video>
-    <div class="barcode-note" id="barcode-status">Iniciando câmera…</div>
-    <details class="barcode-fallback" id="barcode-manual-box"><summary>Se a câmera falhar, usar código manualmente</summary><div class="vehicle-form"><div class="vehicle-field"><label>Código</label><input id="barcode-manual" inputmode="numeric" placeholder="789..."></div><button class="secondary" id="barcode-manual-go">Consultar</button></div></details>
-    <div id="barcode-result"></div>
-  </div>`;
-  document.body.appendChild(overlay);
-  overlay.querySelector("#barcode-close")?.addEventListener("click",closeBarcodeOverlay);
-  overlay.querySelector("#barcode-manual-go")?.addEventListener("click",async()=>{
-    const code=normalizeBarcode(overlay.querySelector("#barcode-manual").value);
-    if(code.length<8){alert("Código inválido.");return;}
-    const video=overlay.querySelector("#barcode-video");
-    video?.srcObject?.getTracks?.().forEach(t=>t.stop());
-    await showGlobalBarcodeMatch(code,overlay);
-  });
-
-  const video=overlay.querySelector("#barcode-video");
-  const status=overlay.querySelector("#barcode-status");
-  if(!navigator.mediaDevices?.getUserMedia){
-    status.textContent="A câmera não está disponível neste navegador.";
-    video.style.display="none";
-    overlay.querySelector("#barcode-manual-box").open=true;
-    return;
-  }
-  if(!("BarcodeDetector" in globalThis)){
-    status.textContent="Este navegador não oferece leitura automática de código.";
-    video.style.display="none";
-    overlay.querySelector("#barcode-manual-box").open=true;
-    return;
-  }
-
-  try{
-    const formats=await BarcodeDetector.getSupportedFormats();
-    const wanted=["ean_13","ean_8","upc_a","upc_e"].filter(x=>formats.includes(x));
-    const detector=new BarcodeDetector(wanted.length?{formats:wanted}:undefined);
-    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}},audio:false});
-    video.srcObject=stream;
-    await video.play();
-    status.textContent="Câmera ativa. Aponte para o código de barras.";
-    let stopped=false;
-    const scan=async()=>{
-      if(stopped || !document.body.contains(overlay)) return;
-      try{
-        const codes=await detector.detect(video);
-        const raw=normalizeBarcode(codes?.[0]?.rawValue);
-        if(raw){
-          stopped=true;
-          stream.getTracks().forEach(t=>t.stop());
-          status.textContent=`Código encontrado: ${raw}`;
-          await showGlobalBarcodeMatch(raw,overlay);
-          return;
-        }
-      }catch(err){}
-      setTimeout(scan,300);
-    };
-    scan();
-  }catch(err){
-    console.warn("global barcode scanner",err);
-    status.textContent="Não consegui abrir a câmera.";
-    video.style.display="none";
-    overlay.querySelector("#barcode-manual-box").open=true;
-  }
-}
-
-function normalizeBarcode(code){
-  return String(code||"").replace(/\D/g,"").trim();
-}
-
-async function lookupBarcodeOnline(code){
-  const clean=normalizeBarcode(code);
-  if(!clean) return null;
-  const domains=[
-    "https://world.openfoodfacts.org",
-    "https://world.openbeautyfacts.org",
-    "https://world.openproductsfacts.org"
-  ];
-  for(const domain of domains){
-    try{
-      const url=`${domain}/api/v2/product/${encodeURIComponent(clean)}.json?fields=code,product_name,brands,quantity,image_front_url,image_url`;
-      const res=await fetch(url,{method:"GET",headers:{"Accept":"application/json"}});
-      if(!res.ok) continue;
-      const data=await res.json();
-      if(data?.status===1 && data.product){
-        const product=data.product;
-        return {
-          code:clean,
-          name:product.product_name || "Produto encontrado",
-          brands:product.brands || "",
-          quantity:product.quantity || "",
-          image:product.image_front_url || product.image_url || "",
-          source:domain.includes("beauty")?"Open Beauty Facts":domain.includes("products")?"Open Products Facts":"Open Food Facts"
-        };
-      }
-    }catch(err){
-      console.warn("barcode lookup",domain,err);
-    }
-  }
-  return {code:clean,name:"",brands:"",quantity:"",image:"",source:""};
-}
-
-async function persistProductBarcode(product, code, match=null, useImage=false){
-  try{
-    const row=await ensureProductRow(product);
-    let imageUrl=useImage && match?.image ? match.image : row.imagem_url;
-
-    // Tenta copiar a imagem para o Storage do Prisma. Se CORS impedir,
-    // conserva a URL pública da base consultada.
-    if(useImage && match?.image){
-      try{
-        const res=await fetch(match.image);
-        if(res.ok){
-          const blob=await res.blob();
-          const ext=(blob.type.split("/")[1]||"jpg").replace(/[^a-z0-9]/gi,"") || "jpg";
-          const path=`${state.session.user.id}/${slugifyProductName(product.name)}-barcode-${Date.now()}.${ext}`;
-          const upload=await supabase.storage.from("produtos").upload(path,blob,{upsert:false,cacheControl:"3600",contentType:blob.type||"image/jpeg"});
-          if(!upload.error){
-            imageUrl=supabase.storage.from("produtos").getPublicUrl(path).data?.publicUrl || imageUrl;
-          }
-        }
-      }catch(copyErr){console.warn("Não foi possível copiar imagem; usando URL remota.",copyErr);}
-    }
-
-    const {data,error}=await supabase.from("produtos").update({
-      codigo_barras:normalizeBarcode(code),
-      imagem_url:imageUrl || null,
-      atualizado_em:new Date().toISOString()
-    }).eq("id",row.id)
-      .select("id,user_id,nome,categoria,unidade_padrao,imagem_url,codigo_barras,monitorar_reposicao,familia_reposicao")
-      .single();
-    if(error) throw error;
-
-    const idx=state.productRows.findIndex(r=>r.id===data.id);
-    if(idx>=0) state.productRows[idx]=data; else state.productRows.push(data);
-    buildProducts();
-    render();
-    const refreshed=state.products.find(x=>searchNorm(x.name)===searchNorm(product.name));
-    if(refreshed && !sheet.classList.contains("hidden")) openProduct(refreshed);
-  }catch(err){
-    alert("Não foi possível salvar o código de barras: "+(err?.message||String(err)));
-  }
-}
-
-function closeBarcodeOverlay(){
-  const overlay=document.querySelector("#barcode-overlay");
-  const video=overlay?.querySelector("video");
-  const stream=video?.srcObject;
-  if(stream?.getTracks) stream.getTracks().forEach(t=>t.stop());
-  overlay?.remove();
-  state.barcodeBusy=false;
-}
-
-async function showBarcodeMatch(product, code, overlay){
-  const result=overlay.querySelector("#barcode-result");
-  result.innerHTML=`<div class="loading">Consultando produto pelo código ${escapeHtml(code)}…</div>`;
-  const match=await lookupBarcodeOnline(code);
-  if(!match) return;
-
-  if(match.name || match.image){
-    result.innerHTML=`<div class="barcode-result">
-      <div class="barcode-product">${match.image?`<img src="${escapeHtml(match.image)}" alt="Produto">`:`<div class="sheet-photo">📦</div>`}<div><div class="barcode-code">${escapeHtml(code)}</div><div class="notification-title">${escapeHtml(match.name||"Produto sem nome")}</div><div class="notification-text">${escapeHtml([match.brands,match.quantity,match.source].filter(Boolean).join(" • "))}</div></div></div>
-      <div class="barcode-actions"><button class="primary" id="barcode-use-all">Usar código${match.image?" + imagem":""}</button><button class="secondary" id="barcode-use-code">Usar só o código</button></div>
-    </div>`;
-    result.querySelector("#barcode-use-all")?.addEventListener("click",async()=>{await persistProductBarcode(product,code,match,Boolean(match.image));closeBarcodeOverlay();});
-    result.querySelector("#barcode-use-code")?.addEventListener("click",async()=>{await persistProductBarcode(product,code,match,false);closeBarcodeOverlay();});
-  }else{
-    result.innerHTML=`<div class="barcode-result"><div class="barcode-code">${escapeHtml(code)}</div><div class="notification-text">Código lido, mas não encontrei imagem/nome nas bases abertas.</div><div class="barcode-actions"><button class="primary" id="barcode-save-only">Salvar código</button><button class="secondary" id="barcode-manual-image">Escolher imagem</button></div></div>`;
-    result.querySelector("#barcode-save-only")?.addEventListener("click",async()=>{await persistProductBarcode(product,code,null,false);closeBarcodeOverlay();});
-    result.querySelector("#barcode-manual-image")?.addEventListener("click",async()=>{await persistProductBarcode(product,code,null,false);closeBarcodeOverlay();chooseProductImage(product);});
-  }
-}
-
-async function openBarcodeScanner(product){
-  if(state.barcodeBusy) return;
-  state.barcodeBusy=true;
-  const overlay=document.createElement("div");
-  overlay.className="barcode-overlay";
-  overlay.id="barcode-overlay";
-  overlay.innerHTML=`<div class="barcode-panel">
-    <div class="barcode-head"><div><b>📷 Código de barras</b><div class="notification-text">${escapeHtml(product.name)}</div></div><button class="sheet-close" id="barcode-close">✕</button></div>
-    <video class="barcode-video" id="barcode-video" playsinline muted></video>
-    <div class="barcode-note" id="barcode-status">Iniciando câmera… Aponte para EAN-13/EAN-8/UPC.</div>
-    <div class="vehicle-form" style="margin-top:10px"><div class="vehicle-field"><label>Ou digite o código</label><input id="barcode-manual" inputmode="numeric" value="${escapeHtml(product.barcode||"")}" placeholder="789..."></div><button class="secondary" id="barcode-manual-go">Consultar código</button></div>
-    <div id="barcode-result"></div>
-  </div>`;
-  document.body.appendChild(overlay);
-  overlay.querySelector("#barcode-close")?.addEventListener("click",closeBarcodeOverlay);
-  overlay.querySelector("#barcode-manual-go")?.addEventListener("click",async()=>{
-    const code=normalizeBarcode(overlay.querySelector("#barcode-manual").value);
-    if(code.length<8){alert("Digite um código de barras válido.");return;}
-    await showBarcodeMatch(product,code,overlay);
-  });
-
-  const video=overlay.querySelector("#barcode-video");
-  const status=overlay.querySelector("#barcode-status");
-
-  if(!navigator.mediaDevices?.getUserMedia){
-    status.textContent="A câmera não está disponível neste navegador. Digite o código abaixo.";
-    video.style.display="none";
-    return;
-  }
-  if(!("BarcodeDetector" in globalThis)){
-    status.textContent="Este navegador não oferece leitura automática de código. Você ainda pode digitar o número abaixo.";
-    video.style.display="none";
-    return;
-  }
-
-  try{
-    const formats=await BarcodeDetector.getSupportedFormats();
-    const wanted=["ean_13","ean_8","upc_a","upc_e"].filter(x=>formats.includes(x));
-    const detector=new BarcodeDetector(wanted.length?{formats:wanted}:undefined);
-    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}},audio:false});
-    video.srcObject=stream;
-    await video.play();
-    status.textContent="Câmera ativa. Aponte para o código de barras.";
-
-    let stopped=false;
-    const scan=async()=>{
-      if(stopped || !document.body.contains(overlay)) return;
-      try{
-        const codes=await detector.detect(video);
-        const raw=normalizeBarcode(codes?.[0]?.rawValue);
-        if(raw){
-          stopped=true;
-          stream.getTracks().forEach(t=>t.stop());
-          status.textContent=`Código encontrado: ${raw}`;
-          overlay.querySelector("#barcode-manual").value=raw;
-          await showBarcodeMatch(product,raw,overlay);
-          return;
-        }
-      }catch(err){}
-      setTimeout(scan,350);
-    };
-    scan();
-  }catch(err){
-    console.warn("barcode scanner",err);
-    status.textContent="Não consegui abrir a câmera. Digite o código abaixo.";
-    video.style.display="none";
-  }
-}
-
-async function lookupImageForKnownBarcode(product){
-  const code=normalizeBarcode(product.barcode);
-  if(!code){openBarcodeScanner(product);return;}
-  state.barcodeBusy=true;
-  const overlay=document.createElement("div");
-  overlay.className="barcode-overlay";
-  overlay.id="barcode-overlay";
-  overlay.innerHTML=`<div class="barcode-panel"><div class="barcode-head"><div><b>🔎 Buscar imagem pelo código</b><div class="notification-text">${escapeHtml(product.name)}</div></div><button class="sheet-close" id="barcode-close">✕</button></div><div id="barcode-result"></div></div>`;
-  document.body.appendChild(overlay);
-  overlay.querySelector("#barcode-close")?.addEventListener("click",closeBarcodeOverlay);
-  await showBarcodeMatch(product,code,overlay);
-}
 
 function openProduct(p){
   backdrop.classList.remove("hidden");
@@ -3719,7 +3274,7 @@ function openProduct(p){
         <div class="sheet-title">${escapeHtml(p.name)}</div>
         <div class="sheet-price">${p.price>0 ? money(p.price) + (p.unit?.toUpperCase()==="KG"?"/kg":"") : "Sem preço recente"}</div>
         <span class="delta ${cls}">${p.history.length>1 ? `${arrow} ${Math.abs(p.delta).toFixed(1).replace(".",",")}%` : "novo"}</span>
-        <div class="image-note">${p.imageUrl ? "Imagem do produto disponível." : "Sem imagem ainda — usa emoji como fallback."}${p.barcode?` • EAN ${escapeHtml(p.barcode)}`:""}</div>
+        <div class="image-note">${p.imageUrl ? "Imagem do produto disponível." : "Sem imagem ainda — usa emoji como fallback."}</div>
       </div>
       <button class="sheet-close" data-close>✕</button>
     </div>
@@ -3734,8 +3289,7 @@ function openProduct(p){
     <div class="sheet-actions">
       <button class="secondary" id="sheet-category">🏷️ Categoria: ${p.category}${p.categoryManual ? " • manual" : " • automática"}</button>
       <button class="secondary" id="sheet-upload-image">🖼️ ${p.imageUrl ? "Trocar imagem" : "Adicionar imagem"}</button>
-      ${p.barcode?`<button class="secondary" id="sheet-barcode-image">🔎 Atualizar imagem pelo código ${escapeHtml(p.barcode)}</button>`:""}
-      <button class="secondary" id="sheet-family">🔗 Família: ${escapeHtml(replenishmentFamily(p))}</button>
+<button class="secondary" id="sheet-family">🔗 Família: ${escapeHtml(replenishmentFamily(p))}</button>
       <button class="secondary" id="sheet-monitor-replenishment">${p.monitorReplenishment === false ? "🔕 Não monitorado" : "🔔 Monitorar reposição"}</button>
       <button class="secondary" id="sheet-add-wishlist">❤️ Comprar depois</button>
       <button class="primary full" id="sheet-add-list">🛒 Adicionar à lista</button>
@@ -3745,7 +3299,6 @@ function openProduct(p){
   sheet.querySelector("#sheet-add-list")?.addEventListener("click",()=>addProductToList(p));
   sheet.querySelector("#sheet-add-wishlist")?.addEventListener("click",()=>addProductToWishlist(p));
   sheet.querySelector("#sheet-upload-image")?.addEventListener("click",()=>chooseProductImage(p));
-  sheet.querySelector("#sheet-barcode-image")?.addEventListener("click",()=>lookupImageForKnownBarcode(p));
   sheet.querySelector("#sheet-category")?.addEventListener("click",()=>changeProductCategory(p));
   sheet.querySelector("#sheet-family")?.addEventListener("click",()=>changeReplenishmentFamily(p));
   sheet.querySelector("#sheet-monitor-replenishment")?.addEventListener("click",()=>setFamilyMonitoring(p,p.monitorReplenishment === false));
