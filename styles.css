@@ -252,3 +252,131 @@ button{cursor:pointer}
 .unit-tag{
   font-size:8px;color:var(--muted);margin-top:3px
 }
+
+/* === PRISMA: Lista - acabamento mobile === */
+.add-list-card{overflow:hidden}
+.search-hint{
+  margin:3px 0 8px;
+  color:var(--muted);
+  font-size:9px;
+  font-weight:850;
+}
+.quick-add-grid{
+  display:grid;
+  grid-template-columns:1fr;
+  gap:8px;
+}
+.quick-add{
+  width:100%;
+  min-width:0;
+  display:grid;
+  grid-template-columns:48px minmax(0,1fr) 28px;
+  align-items:center;
+  gap:10px;
+  border:1px solid var(--line);
+  border-radius:16px;
+  background:linear-gradient(180deg,#131f36,#0e182a);
+  color:#fff;
+  padding:8px 10px;
+  text-align:left;
+  font:inherit;
+  appearance:none;
+  -webkit-appearance:none;
+  box-shadow:none;
+}
+.quick-add:active{transform:scale(.99)}
+.quick-add > span{
+  min-width:0;
+  display:block;
+}
+.quick-add b{
+  display:block;
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:10px;
+  line-height:1.25;
+  font-weight:950;
+  color:#fff;
+}
+.quick-add small{
+  display:block;
+  margin-top:4px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color:var(--muted);
+  font-size:9px;
+  line-height:1.2;
+}
+.quick-add > strong{
+  display:grid;
+  place-items:center;
+  width:28px;
+  height:28px;
+  border-radius:10px;
+  background:rgba(32,224,209,.08);
+  border:1px solid rgba(32,224,209,.15);
+  color:var(--teal);
+  font-size:18px;
+  line-height:1;
+}
+.market-mode-toggle{
+  border:1px solid rgba(255,255,255,.16);
+  border-radius:13px;
+  min-height:39px;
+  padding:0 12px;
+  background:rgba(5,14,28,.30);
+  color:#fff;
+  font:inherit;
+  font-size:10px;
+  font-weight:950;
+  appearance:none;
+  -webkit-appearance:none;
+  backdrop-filter:blur(8px);
+}
+.market-mode-toggle:active{transform:scale(.985)}
+.market-hidden{display:none!important}
+
+@media(max-width:520px){
+  .list-summary{
+    padding:17px 16px;
+  }
+  .list-summary .hero-value{
+    font-size:36px;
+    line-height:1;
+  }
+  .list-summary .hero-chip{
+    max-width:100%;
+    font-size:9px;
+  }
+  .market-mode-toggle{
+    width:auto;
+    max-width:100%;
+    min-height:36px;
+    font-size:9px;
+  }
+  .add-list-card .section-head{
+    align-items:flex-end;
+  }
+  .quick-add{
+    grid-template-columns:46px minmax(0,1fr) 30px;
+    gap:9px;
+    min-height:64px;
+    padding:8px 9px;
+  }
+  .quick-photo{
+    width:46px!important;
+    height:46px!important;
+    border-radius:12px!important;
+    margin-right:0!important;
+  }
+  .quick-add b{
+    font-size:10px;
+  }
+  .quick-add small{
+    font-size:8px;
+  }
+}
+
