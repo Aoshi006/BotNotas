@@ -1,9 +1,9 @@
-const CACHE="prisma-web-v20260920-lista-hotfix";
+const CACHE="prisma-web-v20260920-lista-mobile-hotfix2";
 const ASSETS=[
   "./",
   "./index.html",
-  "./styles.css?v=20260920-lista-hotfix",
-  "./app.js?v=20260920-lista-hotfix",
+  "./styles.css?v=20260920-lista-mobile-hotfix2",
+  "./app.js?v=20260920-lista-mobile-hotfix2",
   "./config.js",
   "./manifest.webmanifest",
   "./icons/icon-192.png",

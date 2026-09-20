@@ -699,33 +699,44 @@ async function loadData(){
 
 
 let backgroundPreloadPromise=null;
+let shoppingListLoadPromise=null;
+
+async function ensureShoppingListLoaded(force=false){
+  if(!state.session) return null;
+  if(state.listLoaded && !force) return null;
+  if(shoppingListLoadPromise && !force) return shoppingListLoadPromise;
+
+  shoppingListLoadPromise=(async()=>{
+    try{
+      const err=await withTimeout(loadShoppingList(),10000,"A leitura da Lista no Supabase");
+      if(err) throw new Error(err);
+      state.listLoaded=true;
+      state.listError=null;
+      return null;
+    }catch(err){
+      state.listLoaded=false;
+      state.listError=err?.message||String(err);
+      return state.listError;
+    }finally{
+      state.listLoading=false;
+      shoppingListLoadPromise=null;
+    }
+  })();
+
+  return shoppingListLoadPromise;
+}
 
 function queueBackgroundPreload(){
   if(backgroundPreloadPromise || !state.session) return;
 
-  backgroundPreloadPromise=(async()=>{
-    const jobs=[];
+  // A Lista é carregada em segundo plano, mas nunca bloqueia uma abertura manual.
+  state.listLoading=true;
+  const listJob=ensureShoppingListLoaded(false).then(()=>{
+    if(state.page==="list") render();
+  });
 
-    if(!state.listLoaded && !state.listLoading){
-      jobs.push((async()=>{
-        state.listLoading=true;
-        try{
-          const err=await loadShoppingList();
-          if(err) throw new Error(err);
-          state.listLoaded=true;
-          state.listError=null;
-        }catch(err){
-          console.error("Prisma preload Lista:",err);
-          state.listError=err?.message||String(err);
-        }finally{
-          state.listLoading=false;
-          if(state.page==="list") render();
-        }
-      })());
-    }
-
-    if(!state.vehicleLoaded && !state.vehicleLoading){
-      jobs.push((async()=>{
+  const vehicleJob=(!state.vehicleLoaded && !state.vehicleLoading)
+    ? (async()=>{
         try{
           await loadVehicleData();
           state.vehicleLoaded=true;
@@ -735,12 +746,13 @@ function queueBackgroundPreload(){
         }finally{
           if(state.page==="fuel") render();
         }
-      })());
-    }
+      })()
+    : Promise.resolve();
 
-    await Promise.allSettled(jobs);
-  })().finally(()=>{backgroundPreloadPromise=null;});
+  backgroundPreloadPromise=Promise.allSettled([listJob,vehicleJob])
+    .finally(()=>{backgroundPreloadPromise=null;});
 }
+
 
 function withTimeout(promise, ms, label){
   let timer;
@@ -754,15 +766,8 @@ async function openListPage(){
   state.page="list";
   state.listError=null;
 
-  // Se já temos a lista em memória, abre imediatamente.
-  if(state.listLoaded || state.activeList){
-    render();
-    if(!state.listLoaded) queueBackgroundPreload();
-    return;
-  }
-
-  // Se o preload já está em andamento, não dispara outra consulta.
-  if(state.listLoading){
+  if(state.listLoaded){
+    state.listLoading=false;
     render();
     return;
   }
@@ -770,17 +775,13 @@ async function openListPage(){
   state.listLoading=true;
   render();
 
-  try{
-    const err=await withTimeout(loadShoppingList(),12000,"A leitura da Lista no Supabase");
-    if(err) throw new Error(err);
-    state.listLoaded=true;
-  }catch(e){
-    console.error("Prisma Lista:",e);
-    state.listError=e?.message||String(e);
-  }finally{
-    state.listLoading=false;
-    render();
+  const err=await ensureShoppingListLoaded(false);
+
+  if(err){
+    state.listError=err;
   }
+
+  render();
 }
 
 async function loadShoppingList(){
@@ -1753,10 +1754,20 @@ function previousMonthKey(key){
 }
 
 function monthSelectorHTML(id="month-selector"){
-  return `<select id="${id}" class="month-selector">
-    ${availableMonths().map(m=>`<option value="${m}" ${m===state.selectedMonth?"selected":""}>${escapeHtml(monthLabel(m))}</option>`).join("")}
-  </select>`;
+  const months=availableMonths();
+  let idx=months.indexOf(state.selectedMonth);
+  if(idx<0) idx=0;
+
+  const newer = idx>0 ? months[idx-1] : "";
+  const older = idx<months.length-1 ? months[idx+1] : "";
+
+  return `<div class="month-switcher" id="${id}">
+    <button type="button" class="month-arrow" data-month-go="${older}" ${older?"":"disabled"} aria-label="Mês anterior">‹</button>
+    <span class="month-current">${escapeHtml(monthLabel(state.selectedMonth))}</span>
+    <button type="button" class="month-arrow" data-month-go="${newer}" ${newer?"":"disabled"} aria-label="Mês seguinte">›</button>
+  </div>`;
 }
+
 
 function home(){
   subtitle.textContent="Seu assistente de compras";
@@ -3522,27 +3533,20 @@ function bindView(){
 
   const marketToggle=document.querySelector("#market-mode-toggle");
   if(marketToggle){
-    const toggleMarket=(ev)=>{
-      if(ev?.type==="pointerup" && ev.pointerType==="mouse") return;
-      if(ev?.type==="click" && marketToggle.dataset.touchHandled==="1"){
-        marketToggle.dataset.touchHandled="0";
-        return;
-      }
-      if(ev?.type==="pointerup"){
-        marketToggle.dataset.touchHandled="1";
-        ev.preventDefault();
-      }
+    marketToggle.addEventListener("click",()=>{
       state.marketMode=!state.marketMode;
       render();
-    };
-    marketToggle.addEventListener("pointerup",toggleMarket,{passive:false});
-    marketToggle.addEventListener("click",toggleMarket);
+    });
   }
 
 
   document.querySelector("#retry-list")?.addEventListener("click",async()=>{
-    state.listLoaded = false;
-    await openListPage();
+    state.listLoaded=false;
+    state.listError=null;
+    state.listLoading=true;
+    render();
+    await ensureShoppingListLoaded(true);
+    render();
   });
 
 
@@ -3665,9 +3669,11 @@ function bindView(){
   });
 
 
-  ["#home-month-selector","#history-month-selector"].forEach(sel=>{
-    document.querySelector(sel)?.addEventListener("change",e=>{
-      state.selectedMonth=e.target.value;
+  document.querySelectorAll("[data-month-go]").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      const target=btn.dataset.monthGo;
+      if(!target) return;
+      state.selectedMonth=target;
       state.moreNoteId=null;
       render();
     });

@@ -674,3 +674,62 @@ button{cursor:pointer}
   to{opacity:1}
 }
 
+
+
+/* === HOTFIX MOBILE: mês e Modo Mercado === */
+.month-switcher{
+  display:flex;
+  align-items:center;
+  gap:7px;
+  min-height:36px;
+  padding:3px 5px;
+  border-radius:12px;
+  border:1px solid rgba(255,255,255,.14);
+  background:#0d1728;
+  color:#fff;
+}
+.month-current{
+  min-width:112px;
+  text-align:center;
+  font-size:9px;
+  font-weight:900;
+  white-space:nowrap;
+}
+.month-arrow{
+  width:30px;
+  height:30px;
+  display:grid;
+  place-items:center;
+  border:0;
+  border-radius:9px;
+  background:rgba(255,255,255,.055);
+  color:#fff;
+  font-size:20px;
+  line-height:1;
+  font-weight:900;
+  touch-action:manipulation;
+  -webkit-tap-highlight-color:transparent;
+}
+.month-arrow:disabled{
+  opacity:.22;
+}
+.market-mode-toggle{
+  pointer-events:auto!important;
+  touch-action:manipulation!important;
+  -webkit-tap-highlight-color:transparent!important;
+}
+
+@media(max-width:520px){
+  .month-switcher{
+    width:auto;
+    max-width:100%;
+  }
+  .month-current{
+    min-width:94px;
+    font-size:8px;
+  }
+  .month-arrow{
+    width:32px;
+    height:32px;
+  }
+}
