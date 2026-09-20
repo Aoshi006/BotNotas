@@ -771,6 +771,119 @@ async function addProductToList(product){
   closeProduct();
 }
 
+
+async function addCustomItemToList(name, unitType){
+  const clean = norm(name);
+  if(!clean) return;
+
+  if(!state.activeList){
+    const err = await loadShoppingList();
+    if(err){
+      alert("Não foi possível preparar a Lista: " + err);
+      return;
+    }
+    state.listLoaded = true;
+  }
+
+  const unit = String(unitType || "UN").toUpperCase()==="KG" ? "KG" : "UN";
+
+  let weight = null;
+  if(unit==="KG"){
+    const typed = prompt("Quanto deseja comprar em kg?", "1");
+    if(typed===null) return;
+
+    const parsed = Number(String(typed).replace(",","."));
+    if(!Number.isFinite(parsed) || parsed<=0){
+      alert("Informe um peso válido.");
+      return;
+    }
+    weight = parsed;
+  }
+
+  const existing = state.listItems.find(
+    i=>searchNorm(i.produto)===searchNorm(clean)
+  );
+
+  if(existing){
+    const changes = unit==="KG"
+      ? {unidade:"KG",peso_kg:weight}
+      : {unidade:"UN",quantidade:num(existing.quantidade||1)+1};
+
+    await updateListItem(existing.id,changes,false);
+    state.listSearch="";
+    await loadShoppingList();
+    render();
+    return;
+  }
+
+  const payload = {
+    lista_id: state.activeList.id,
+    produto: clean,
+    unidade: unit,
+    quantidade: 1,
+    peso_kg: weight,
+    preco_previsto: null,
+    preco_atual: null,
+    no_carrinho: false
+  };
+
+  const { error } = await supabase.from("lista_itens").insert(payload);
+  if(error){
+    alert("Não foi possível adicionar o item: " + error.message);
+    return;
+  }
+
+  state.listSearch="";
+  await loadShoppingList();
+  render();
+}
+
+function possibleLinksForManualItem(item){
+  const exact = state.products.find(p=>searchNorm(p.name)===searchNorm(item.produto));
+  if(exact) return [];
+
+  const q = String(item.produto||"").trim().toLowerCase();
+  if(!q) return [];
+
+  return state.products
+    .filter(p=>smartMatch(p,q))
+    .sort((a,b)=>{
+      const ah=a.history?.length||0, bh=b.history?.length||0;
+      if(bh!==ah) return bh-ah;
+      return a.name.localeCompare(b.name,"pt-BR");
+    })
+    .slice(0,4);
+}
+
+async function linkManualListItem(item, product){
+  if(!item || !product) return;
+
+  const ok = confirm(
+    `Vincular "${item.produto}" ao produto importado:\n\n${product.name}\n\n` +
+    `O Prisma manterá "${item.produto}" como nome preferido e juntará o histórico desse produto a ele.`
+  );
+  if(!ok) return;
+
+  await addUserAlias(product.name, item.produto);
+  await loadData();
+
+  const refreshed = state.products.find(p=>searchNorm(p.name)===searchNorm(item.produto));
+  const current = state.listItems.find(x=>String(x.id)===String(item.id));
+
+  if(refreshed && current){
+    const changes = {};
+    if(refreshed.unit) changes.unidade = refreshed.unit;
+    if(refreshed.price>0) changes.preco_previsto = refreshed.price;
+
+    if(Object.keys(changes).length){
+      await updateListItem(current.id,changes,false);
+      await loadShoppingList();
+    }
+  }
+
+  render();
+}
+
 async function updateListItem(id, changes, refresh=true){
   const { error } = await supabase.from("lista_itens").update(changes).eq("id",id);
   if(error){
@@ -1623,8 +1736,8 @@ function shoppingList(){
             </span>
           </div>
           <div class="custom-list-unit-actions">
-            <button data-add-custom-list="${escapeHtml(rawQ)}" data-custom-unit="UN">UN</button>
-            <button data-add-custom-list="${escapeHtml(rawQ)}" data-custom-unit="KG">KG</button>
+            <button type="button" data-add-custom-list="${escapeHtml(rawQ)}" data-custom-unit="UN">UN</button>
+            <button type="button" data-add-custom-list="${escapeHtml(rawQ)}" data-custom-unit="KG">KG</button>
           </div>
         </div>` : ""}
       <div class="quick-add-grid">
@@ -1693,7 +1806,7 @@ function shoppingItem(item){
         ${!product ? (()=>{ const links=possibleLinksForManualItem(item); return links.length ? `
           <div class="manual-link-box">
             <span>Produto parecido encontrado no histórico:</span>
-            ${links.map(p=>`<button data-link-manual-item="${item.id}" data-link-product="${p.id}">Vincular a ${escapeHtml(p.name)}</button>`).join("")}
+            ${links.map(p=>`<button type="button" data-link-manual-item="${item.id}" data-link-product="${p.id}">Vincular a ${escapeHtml(p.name)}</button>`).join("")}
           </div>` : ""; })() : ""}
       </div>
       <div class="shopping-actions-top">
