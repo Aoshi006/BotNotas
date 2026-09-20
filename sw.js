@@ -1,9 +1,9 @@
-const CACHE="prisma-web-v20260920-perf-flex-delete";
+const CACHE="prisma-web-v20260920-lista-hotfix";
 const ASSETS=[
   "./",
   "./index.html",
-  "./styles.css?v=20260920-perf-flex-delete",
-  "./app.js?v=20260920-perf-flex-delete",
+  "./styles.css?v=20260920-lista-hotfix",
+  "./app.js?v=20260920-lista-hotfix",
   "./config.js",
   "./manifest.webmanifest",
   "./icons/icon-192.png",

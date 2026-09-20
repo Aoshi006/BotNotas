@@ -895,6 +895,149 @@ async function addProductToList(product){
   closeProduct();
 }
 
+
+async function addCustomItemToList(name, unitType){
+  const clean=norm(name);
+  if(!clean) return;
+
+  if(!state.activeList){
+    const err=await loadShoppingList();
+    if(err){
+      alert("Não foi possível preparar a Lista: "+err);
+      return;
+    }
+    state.listLoaded=true;
+  }
+
+  const unit=String(unitType||"UN").toUpperCase()==="KG" ? "KG" : "UN";
+  let weight=null;
+
+  if(unit==="KG"){
+    const typed=prompt("Quanto deseja comprar em kg?","1");
+    if(typed===null) return;
+
+    weight=parseDecimal(typed);
+    if(!(weight>0)){
+      alert("Informe um peso válido.");
+      return;
+    }
+  }
+
+  const existing=state.listItems.find(
+    i=>searchNorm(i.produto)===searchNorm(clean)
+  );
+
+  if(existing){
+    const changes=unit==="KG"
+      ? {unidade:"KG",peso_kg:weight}
+      : {unidade:"UN",quantidade:num(existing.quantidade||1)+1};
+
+    await updateListItem(existing.id,changes,false);
+    state.listSearch="";
+    render();
+    return;
+  }
+
+  const payload={
+    lista_id:state.activeList.id,
+    produto:clean,
+    unidade:unit,
+    quantidade:1,
+    peso_kg:weight,
+    preco_previsto:null,
+    preco_atual:null,
+    no_carrinho:false
+  };
+
+  const {data:inserted,error}=await supabase
+    .from("lista_itens")
+    .insert(payload)
+    .select("id,lista_id,produto,unidade,quantidade,peso_kg,preco_previsto,preco_atual,no_carrinho,criado_em")
+    .single();
+
+  if(error){
+    alert("Não foi possível adicionar o item: "+error.message);
+    return;
+  }
+
+  if(inserted) state.listItems.push(inserted);
+  state.listLoaded=true;
+  state.listSearch="";
+  render();
+}
+
+function possibleLinksForManualItem(item){
+  if(!item?.produto) return [];
+
+  // Se já existe exatamente na biblioteca, não precisa sugerir vínculo.
+  if(productByName(item.produto)) return [];
+
+  const query=String(item.produto).trim().toLowerCase();
+  if(!query) return [];
+
+  return state.products
+    .filter(p=>smartMatch(p,query))
+    .sort((a,b)=>{
+      const bh=b.history?.length||0;
+      const ah=a.history?.length||0;
+      if(bh!==ah) return bh-ah;
+      return a.name.localeCompare(b.name,"pt-BR");
+    })
+    .slice(0,4);
+}
+
+async function linkManualListItem(item, product){
+  if(!item || !product) return;
+
+  const ok=confirm(
+    `Vincular "${item.produto}" ao produto importado:\n\n${product.name}\n\n`+
+    `O Prisma manterá "${item.produto}" como o nome preferido e usará o histórico real da nota.`
+  );
+  if(!ok) return;
+
+  const alias=norm(product.name);
+  const canonical=norm(item.produto);
+
+  const {data,error}=await supabase
+    .from("produto_alias_usuario")
+    .upsert({
+      user_id:state.session.user.id,
+      alias,
+      produto_canonico:canonical,
+      tipo:"alias",
+      grupo_id:null
+    },{onConflict:"user_id,alias"})
+    .select("id,user_id,alias,produto_canonico,tipo,grupo_id,criado_em")
+    .single();
+
+  if(error){
+    alert("Não foi possível vincular: "+error.message);
+    return;
+  }
+
+  const idx=state.userAliases.findIndex(
+    x=>searchNorm(x.alias)===searchNorm(alias)
+  );
+  if(idx>=0) state.userAliases[idx]=data;
+  else state.userAliases.unshift(data);
+
+  state.aliases.set(norm(alias),norm(canonical));
+  buildProducts();
+
+  // Atualiza unidade/preço previsto quando o produto real trouxer essas informações.
+  const linked=state.products.find(p=>searchNorm(p.name)===searchNorm(canonical));
+  const changes={};
+
+  if(linked?.unit) changes.unidade=linked.unit;
+  if(linked?.price>0) changes.preco_previsto=linked.price;
+
+  if(Object.keys(changes).length){
+    await updateListItem(item.id,changes,false);
+  }
+
+  render();
+}
+
 async function updateListItem(id, changes, refresh=true){
   const { error } = await supabase.from("lista_itens").update(changes).eq("id",id);
   if(error){
@@ -1881,11 +2024,19 @@ function shoppingItem(item){
       <div>
         <div class="shopping-name">${escapeHtml(item.produto.toUpperCase())}</div>
         <div class="shopping-last">${product && predicted>0 ? `Último ${money(predicted)}${kg?"/kg":""} • ${escapeHtml(item.unidade||"")}` : `Sem histórico de preço • ${escapeHtml(item.unidade||"UN")}`}</div>
-        ${!product ? (()=>{ const links=possibleLinksForManualItem(item); return links.length ? `
-          <div class="manual-link-box">
-            <span>Produto parecido encontrado no histórico:</span>
-            ${links.map(p=>`<button data-link-manual-item="${item.id}" data-link-product="${p.id}">Vincular a ${escapeHtml(p.name)}</button>`).join("")}
-          </div>` : ""; })() : ""}
+        ${!product ? (()=>{ 
+          try{
+            const links=possibleLinksForManualItem(item);
+            return links.length ? `
+              <div class="manual-link-box">
+                <span>Produto parecido encontrado no histórico:</span>
+                ${links.map(p=>`<button data-link-manual-item="${item.id}" data-link-product="${p.id}">Vincular a ${escapeHtml(p.name)}</button>`).join("")}
+              </div>` : "";
+          }catch(err){
+            console.error("Sugestão de vínculo:",err);
+            return "";
+          }
+        })() : ""}
       </div>
       <div class="shopping-actions-top">
         <button class="image-mini-btn" data-upload-product="${escapeHtml(item.produto)}" title="Adicionar ou trocar imagem">🖼️</button>
