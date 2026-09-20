@@ -475,3 +475,180 @@ button{cursor:pointer}
   }
 }
 
+
+/* === PRISMA - lote final: filtros, mês, lista mobile, foto === */
+
+.month-selector{
+  min-height:34px;
+  max-width:190px;
+  border-radius:12px;
+  border:1px solid rgba(255,255,255,.14);
+  background:#0d1728;
+  color:#fff;
+  padding:0 10px;
+  font-size:9px;
+  font-weight:900;
+  outline:none;
+}
+.hero-month-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+.hero-month-row .eyebrow{margin:0}
+
+/* Evita "células de Excel" em qualquer navegador */
+.shopping-item input,
+.shopping-item select,
+.shopping-item textarea,
+.market-input,
+.price-input{
+  box-sizing:border-box!important;
+  background:#0f1b2f!important;
+  color:#fff!important;
+  border:1px solid rgba(168,192,226,.16)!important;
+  border-radius:11px!important;
+  outline:none!important;
+  box-shadow:none!important;
+  appearance:none!important;
+  -webkit-appearance:none!important;
+  -webkit-text-fill-color:#fff!important;
+  caret-color:#fff!important;
+}
+.shopping-item input::placeholder,
+.market-input::placeholder{
+  color:#7f91aa!important;
+  opacity:1;
+}
+.shopping-item input:-webkit-autofill,
+.shopping-item input:-webkit-autofill:hover,
+.shopping-item input:-webkit-autofill:focus{
+  -webkit-text-fill-color:#fff!important;
+  -webkit-box-shadow:0 0 0 1000px #0f1b2f inset!important;
+  transition:background-color 9999s ease-in-out 0s;
+}
+.market-input-wrap{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  min-height:40px;
+  padding:0 9px;
+  border:1px solid rgba(168,192,226,.14);
+  border-radius:12px;
+  background:#0f1b2f;
+}
+.market-input-wrap .market-input{
+  flex:1;
+  min-width:0;
+  border:0!important;
+  padding:0!important;
+  min-height:36px;
+  background:transparent!important;
+}
+.market-input-wrap b,
+.market-input-wrap em{
+  flex:none;
+  color:#dce8f6;
+  font-size:10px;
+  font-style:normal;
+}
+.remove-item{
+  width:34px!important;
+  height:34px!important;
+  display:grid!important;
+  place-items:center!important;
+  border-radius:12px!important;
+  border:1px solid rgba(255,101,126,.18)!important;
+  background:rgba(255,101,126,.07)!important;
+  color:#ff8194!important;
+  font-size:17px!important;
+  font-weight:950!important;
+  appearance:none!important;
+  -webkit-appearance:none!important;
+}
+.remove-item:active{transform:scale(.96)}
+
+/* Modo Mercado */
+.market-mode-toggle{
+  position:relative;
+  z-index:3;
+  touch-action:manipulation;
+  cursor:pointer;
+  user-select:none;
+  -webkit-user-select:none;
+}
+.market-mode-list .shopping-item{
+  padding:12px;
+  margin-bottom:10px;
+  border-color:rgba(32,224,209,.13);
+}
+.market-mode-list .shopping-item.picked{
+  opacity:.56;
+  border-color:rgba(36,214,154,.25);
+}
+.market-mode-list .manual-link-box{display:none}
+.market-mode-list .shopping-last{font-size:8px}
+.market-totals{
+  position:sticky;
+  bottom:78px;
+  z-index:10;
+  padding:8px 0 3px;
+  background:linear-gradient(180deg,transparent,#07101d 28%);
+}
+
+/* Foto de produto tratada em fundo branco */
+.product-photo.has-image,
+.shopping-photo.has-image,
+.sheet-photo.has-image,
+.quick-photo.has-image{
+  background:#fff!important;
+}
+.product-photo.has-image img,
+.shopping-photo.has-image img,
+.sheet-photo.has-image img,
+.quick-photo.has-image img{
+  object-fit:contain!important;
+  background:#fff!important;
+}
+
+@media(max-width:520px){
+  .hero-month-row{
+    align-items:flex-start;
+  }
+  .month-selector{
+    max-width:155px;
+    font-size:8px;
+  }
+  .shopping-item{
+    overflow:hidden;
+  }
+  .shopping-top{
+    grid-template-columns:48px minmax(0,1fr) auto;
+  }
+  .shopping-actions-top{
+    gap:5px;
+  }
+  .image-mini-btn,.remove-item{
+    width:32px!important;
+    height:32px!important;
+  }
+  .market-row{
+    grid-template-columns:1fr!important;
+    gap:8px!important;
+  }
+  .market-field{
+    min-width:0;
+  }
+  .market-mode-list .market-row{
+    grid-template-columns:1fr 1fr!important;
+  }
+  .market-mode-list .shopping-photo{
+    width:58px;
+    height:58px;
+  }
+  .market-mode-list .shopping-name{
+    font-size:12px;
+  }
+}
+

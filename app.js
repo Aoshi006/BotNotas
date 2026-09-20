@@ -20,6 +20,7 @@ const state = {
   products: [],
   productRows: [],
   productFilter: "Todos",
+  selectedMonth: new Date().toISOString().slice(0,7),
   activeList: null,
   listItems: [],
   listSearch: "",
@@ -443,7 +444,7 @@ async function ensureProductRow(product){
   return data;
 }
 
-async function chooseProductImage(product){
+async function chooseProductImage(product, source="gallery"){
   const target = typeof product === "string" ? (productByName(product) || { name: product, unit: "" }) : product;
   if(!target?.name){
     alert("Não foi possível identificar o produto para a imagem.");
@@ -453,12 +454,79 @@ async function chooseProductImage(product){
   const input = document.createElement("input");
   input.type = "file";
   input.accept = "image/*";
+  if(source==="camera") input.setAttribute("capture","environment");
+
   input.addEventListener("change", async ()=>{
     const file = input.files?.[0];
-    if(file) await uploadProductImage(target, file);
+    if(!file) return;
+    const prepared = await prepareProductPhoto(file);
+    await uploadProductImage(target, prepared);
   }, { once:true });
+
   input.click();
 }
+
+async function prepareProductPhoto(file){
+  try{
+    const bitmap = await createImageBitmap(file);
+    const maxSide = 1200;
+    const ratio = Math.min(maxSide/bitmap.width, maxSide/bitmap.height, 1);
+    const drawW = Math.max(1,Math.round(bitmap.width*ratio));
+    const drawH = Math.max(1,Math.round(bitmap.height*ratio));
+
+    const size = Math.max(drawW,drawH);
+    const canvas = document.createElement("canvas");
+    canvas.width=size;
+    canvas.height=size;
+    const ctx=canvas.getContext("2d",{willReadFrequently:true});
+
+    ctx.fillStyle="#ffffff";
+    ctx.fillRect(0,0,size,size);
+
+    const x=Math.round((size-drawW)/2);
+    const y=Math.round((size-drawH)/2);
+    ctx.drawImage(bitmap,x,y,drawW,drawH);
+
+    // Se os cantos da foto forem claros e parecidos, normaliza o fundo claro para branco.
+    // Isso ajuda fotos tiradas contra prateleira/fundo claro sem destruir embalagens coloridas.
+    const image=ctx.getImageData(0,0,size,size);
+    const data=image.data;
+    const samples=[
+      [2,2],[size-3,2],[2,size-3],[size-3,size-3]
+    ].map(([sx,sy])=>{
+      const i=(sy*size+sx)*4;
+      return [data[i],data[i+1],data[i+2]];
+    });
+
+    const avg=samples.reduce((a,c)=>[a[0]+c[0],a[1]+c[1],a[2]+c[2]],[0,0,0]).map(v=>v/samples.length);
+    const light=(avg[0]+avg[1]+avg[2])/3>185;
+    const spread=Math.max(...samples.flatMap(c=>[
+      Math.abs(c[0]-avg[0]),Math.abs(c[1]-avg[1]),Math.abs(c[2]-avg[2])
+    ]));
+
+    if(light && spread<55){
+      for(let i=0;i<data.length;i+=4){
+        const dr=data[i]-avg[0], dg=data[i+1]-avg[1], db=data[i+2]-avg[2];
+        const dist=Math.sqrt(dr*dr+dg*dg+db*db);
+        const brightness=(data[i]+data[i+1]+data[i+2])/3;
+        if(dist<58 && brightness>150){
+          data[i]=255; data[i+1]=255; data[i+2]=255;
+        }
+      }
+      ctx.putImageData(image,0,0);
+    }
+
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,"image/jpeg",0.88));
+    if(!blob) return file;
+
+    const base=(file.name||"produto").replace(/\.[^.]+$/,"");
+    return new File([blob],`${base}-prisma.jpg`,{type:"image/jpeg"});
+  }catch(err){
+    console.warn("prepareProductPhoto:",err);
+    return file;
+  }
+}
+
 
 async function uploadProductImage(product, file){
   if(!state.session){
@@ -769,119 +837,6 @@ async function addProductToList(product){
   await loadShoppingList();
   render();
   closeProduct();
-}
-
-
-async function addCustomItemToList(name, unitType){
-  const clean = norm(name);
-  if(!clean) return;
-
-  if(!state.activeList){
-    const err = await loadShoppingList();
-    if(err){
-      alert("Não foi possível preparar a Lista: " + err);
-      return;
-    }
-    state.listLoaded = true;
-  }
-
-  const unit = String(unitType || "UN").toUpperCase()==="KG" ? "KG" : "UN";
-
-  let weight = null;
-  if(unit==="KG"){
-    const typed = prompt("Quanto deseja comprar em kg?", "1");
-    if(typed===null) return;
-
-    const parsed = Number(String(typed).replace(",","."));
-    if(!Number.isFinite(parsed) || parsed<=0){
-      alert("Informe um peso válido.");
-      return;
-    }
-    weight = parsed;
-  }
-
-  const existing = state.listItems.find(
-    i=>searchNorm(i.produto)===searchNorm(clean)
-  );
-
-  if(existing){
-    const changes = unit==="KG"
-      ? {unidade:"KG",peso_kg:weight}
-      : {unidade:"UN",quantidade:num(existing.quantidade||1)+1};
-
-    await updateListItem(existing.id,changes,false);
-    state.listSearch="";
-    await loadShoppingList();
-    render();
-    return;
-  }
-
-  const payload = {
-    lista_id: state.activeList.id,
-    produto: clean,
-    unidade: unit,
-    quantidade: 1,
-    peso_kg: weight,
-    preco_previsto: null,
-    preco_atual: null,
-    no_carrinho: false
-  };
-
-  const { error } = await supabase.from("lista_itens").insert(payload);
-  if(error){
-    alert("Não foi possível adicionar o item: " + error.message);
-    return;
-  }
-
-  state.listSearch="";
-  await loadShoppingList();
-  render();
-}
-
-function possibleLinksForManualItem(item){
-  const exact = state.products.find(p=>searchNorm(p.name)===searchNorm(item.produto));
-  if(exact) return [];
-
-  const q = String(item.produto||"").trim().toLowerCase();
-  if(!q) return [];
-
-  return state.products
-    .filter(p=>smartMatch(p,q))
-    .sort((a,b)=>{
-      const ah=a.history?.length||0, bh=b.history?.length||0;
-      if(bh!==ah) return bh-ah;
-      return a.name.localeCompare(b.name,"pt-BR");
-    })
-    .slice(0,4);
-}
-
-async function linkManualListItem(item, product){
-  if(!item || !product) return;
-
-  const ok = confirm(
-    `Vincular "${item.produto}" ao produto importado:\n\n${product.name}\n\n` +
-    `O Prisma manterá "${item.produto}" como nome preferido e juntará o histórico desse produto a ele.`
-  );
-  if(!ok) return;
-
-  await addUserAlias(product.name, item.produto);
-  await loadData();
-
-  const refreshed = state.products.find(p=>searchNorm(p.name)===searchNorm(item.produto));
-  const current = state.listItems.find(x=>String(x.id)===String(item.id));
-
-  if(refreshed && current){
-    const changes = {};
-    if(refreshed.unit) changes.unidade = refreshed.unit;
-    if(refreshed.price>0) changes.preco_previsto = refreshed.price;
-
-    if(Object.keys(changes).length){
-      await updateListItem(current.id,changes,false);
-      await loadShoppingList();
-    }
-  }
-
-  render();
 }
 
 async function updateListItem(id, changes, refresh=true){
@@ -1565,17 +1520,65 @@ function endingCard({product:p,estimate:e}){
   </article>`;
 }
 
+
+function availableMonths(){
+  const months = new Set();
+  for(const n of state.notas){
+    const d = new Date(n.data_emissao || 0);
+    if(Number.isNaN(d.getTime())) continue;
+    months.add(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`);
+  }
+  const current = new Date().toISOString().slice(0,7);
+  months.add(current);
+  return [...months].sort().reverse();
+}
+
+function monthLabel(key){
+  const [y,m] = String(key).split("-").map(Number);
+  if(!y || !m) return key;
+  const label = new Intl.DateTimeFormat("pt-BR",{month:"long",year:"numeric"})
+    .format(new Date(y,m-1,1));
+  return label.charAt(0).toUpperCase()+label.slice(1);
+}
+
+function noteMonthKey(note){
+  const d = new Date(note?.data_emissao || 0);
+  if(Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+}
+
+function previousMonthKey(key){
+  const [y,m]=String(key).split("-").map(Number);
+  const d=new Date(y,m-2,1);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+}
+
+function monthSelectorHTML(id="month-selector"){
+  return `<select id="${id}" class="month-selector">
+    ${availableMonths().map(m=>`<option value="${m}" ${m===state.selectedMonth?"selected":""}>${escapeHtml(monthLabel(m))}</option>`).join("")}
+  </select>`;
+}
+
 function home(){
   subtitle.textContent="Seu assistente de compras";
-  const totalMonth = state.notas
-    .filter(n=>{
-      const d=new Date(n.data_emissao||0), now=new Date();
-      return d.getMonth()===now.getMonth() && d.getFullYear()===now.getFullYear();
-    })
+
+  const selected = state.selectedMonth || new Date().toISOString().slice(0,7);
+  const selectedNotes = state.notas.filter(n=>noteMonthKey(n)===selected);
+  const totalMonth = selectedNotes.reduce((s,n)=>s+num(n.valor_total),0);
+
+  const prevKey = previousMonthKey(selected);
+  const prevTotal = state.notas
+    .filter(n=>noteMonthKey(n)===prevKey)
     .reduce((s,n)=>s+num(n.valor_total),0);
 
-  const recent = state.notas.slice(0,4);
-  const movements=[...state.products].filter(p=>Math.abs(p.delta)>=0.01).sort((a,b)=>Math.abs(b.delta)-Math.abs(a.delta)).slice(0,2);
+  const monthDelta = prevTotal>0 ? ((totalMonth-prevTotal)/prevTotal)*100 : null;
+  const recent = selectedNotes.slice(0,4);
+
+  const movements=[...state.products]
+    .filter(p=>Math.abs(p.delta)>=0.01)
+    .sort((a,b)=>Math.abs(b.delta)-Math.abs(a.delta))
+    .slice(0,2);
+
   const ending = endingCandidates();
 
   const byMonth=new Map();
@@ -1585,6 +1588,7 @@ function home(){
     const key=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
     byMonth.set(key,(byMonth.get(key)||0)+num(n.valor_total));
   });
+
   const monthEntries=[...byMonth.entries()].sort().slice(-5);
   const monthVals=monthEntries.map(x=>x[1]);
   const monthLabels=monthEntries.map(([k])=>{
@@ -1594,9 +1598,15 @@ function home(){
 
   return `
     <section class="hero">
-      <div class="eyebrow">💰 Gasto do mês</div>
+      <div class="hero-month-row">
+        <div class="eyebrow">💰 Gasto do mês</div>
+        ${monthSelectorHTML("home-month-selector")}
+      </div>
       <div class="hero-value">${money(totalMonth)}</div>
-      <div class="hero-chip"><span class="real-badge">● dados reais</span></div>
+      <div class="hero-chip">
+        <span class="real-badge">● dados reais</span>
+        ${monthDelta===null ? "" : `<span>${monthDelta>=0?"↑":"↓"} ${Math.abs(monthDelta).toFixed(1).replace(".",",")}% vs. ${escapeHtml(monthLabel(prevKey))}</span>`}
+      </div>
     </section>
 
     <section class="section">
@@ -1612,9 +1622,9 @@ function home(){
     </section>
 
     <div class="collapse">
-      <button data-collapse><span>🕒 Compras recentes</span><span>⌄</span></button>
+      <button data-collapse><span>🕒 Compras de ${escapeHtml(monthLabel(selected))}</span><span>⌄</span></button>
       <div class="collapse-body">
-        ${recent.map(n=>`<div class="purchase-row"><div><strong>${escapeHtml(String(n.nome_estabelecimento||"").toUpperCase())}</strong><span>${formatDate(n.data_emissao)}</span></div><strong>${money(n.valor_total)}</strong></div>`).join("")}
+        ${recent.length ? recent.map(n=>`<div class="purchase-row"><div><strong>${escapeHtml(String(n.nome_estabelecimento||"").toUpperCase())}</strong><span>${formatDate(n.data_emissao)}</span></div><strong>${money(n.valor_total)}</strong></div>`).join("") : `<div class="card-sub">Nenhuma compra nesse mês.</div>`}
       </div>
     </div>
 
@@ -1630,7 +1640,6 @@ function home(){
       ${ending.length ? `<div class="ending-grid">${ending.map(endingCard).join("")}</div>` : `<div class="card-sub">Ainda não há ciclos de compra suficientes para estimar reposição.</div>`}
     </section>`;
 }
-
 function productCard(p){
   const cls=p.delta<0?"down":"up", arrow=p.delta<0?"↓":"↑";
   const unit=p.unit ? `<div class="unit-tag">${escapeHtml(p.unit)}</div>` : "";
@@ -1648,13 +1657,26 @@ function productCard(p){
 
 function products(){
   subtitle.textContent="Sua biblioteca de produtos";
-  const cats=["Todos","Mercado","Higiene","Bebidas","Combustível"];
-  const visible=state.productFilter==="Todos"?state.products:state.products.filter(p=>p.category===state.productFilter);
+
+  const dynamicCategories = [...new Set(
+    state.products
+      .map(p=>norm(p.category))
+      .filter(Boolean)
+  )].sort((a,b)=>a.localeCompare(b,"pt-BR"));
+
+  const cats=["Todos",...dynamicCategories];
+
+  if(!cats.includes(state.productFilter)) state.productFilter="Todos";
+
+  const visible = state.productFilter==="Todos"
+    ? state.products
+    : state.products.filter(p=>norm(p.category)===state.productFilter);
+
   return `
     <div class="products-toolbar">
       <input id="product-search" class="search" placeholder="🔎 Buscar produtos, marcas ou categorias">
-</div>
-    <div class="filter-row">${cats.map(c=>`<button class="filter-chip ${state.productFilter===c?"active":""}" data-filter="${c}">${c}</button>`).join("")}</div>
+    </div>
+    <div class="filter-row">${cats.map(c=>`<button class="filter-chip ${state.productFilter===c?"active":""}" data-filter="${escapeHtml(c)}">${escapeHtml(c)}</button>`).join("")}</div>
     <div id="products-grid" class="product-grid">${visible.map(productCard).join("")}</div>`;
 }
 
@@ -1714,7 +1736,7 @@ function shoppingList(){
       <div class="eyebrow">🛒 ${escapeHtml(state.activeList?.nome || "Lista principal")}</div>
       <div class="hero-value">${money(estimated)}</div>
       <div class="hero-chip">${state.listItems.length} itens • ${inCart} no carrinho • ${pending} faltando</div>
-      <button class="market-mode-toggle" id="market-mode-toggle">
+      <button type="button" class="market-mode-toggle" id="market-mode-toggle" aria-pressed="${state.marketMode?"true":"false"}">
         ${state.marketMode ? "✕ Sair do modo mercado" : "🛒 Modo mercado"}
       </button>
     </section>
@@ -1736,8 +1758,8 @@ function shoppingList(){
             </span>
           </div>
           <div class="custom-list-unit-actions">
-            <button type="button" data-add-custom-list="${escapeHtml(rawQ)}" data-custom-unit="UN">UN</button>
-            <button type="button" data-add-custom-list="${escapeHtml(rawQ)}" data-custom-unit="KG">KG</button>
+            <button data-add-custom-list="${escapeHtml(rawQ)}" data-custom-unit="UN">UN</button>
+            <button data-add-custom-list="${escapeHtml(rawQ)}" data-custom-unit="KG">KG</button>
           </div>
         </div>` : ""}
       <div class="quick-add-grid">
@@ -1806,7 +1828,7 @@ function shoppingItem(item){
         ${!product ? (()=>{ const links=possibleLinksForManualItem(item); return links.length ? `
           <div class="manual-link-box">
             <span>Produto parecido encontrado no histórico:</span>
-            ${links.map(p=>`<button type="button" data-link-manual-item="${item.id}" data-link-product="${p.id}">Vincular a ${escapeHtml(p.name)}</button>`).join("")}
+            ${links.map(p=>`<button data-link-manual-item="${item.id}" data-link-product="${p.id}">Vincular a ${escapeHtml(p.name)}</button>`).join("")}
           </div>` : ""; })() : ""}
       </div>
       <div class="shopping-actions-top">
@@ -2877,7 +2899,11 @@ async function deleteUserAlias(id){
 
 function purchaseHistoryMore(){
   const q=searchNorm(state.moreSearch);
-  const filtered=state.notas.filter(n=>{
+  const selected=state.selectedMonth || new Date().toISOString().slice(0,7);
+
+  const monthNotes=state.notas.filter(n=>noteMonthKey(n)===selected);
+
+  const filtered=monthNotes.filter(n=>{
     if(!q) return true;
     return searchNorm(`${n.nome_estabelecimento||""} ${n.chave||""} ${formatDate(n.data_emissao)}`).includes(q);
   });
@@ -2889,10 +2915,18 @@ function purchaseHistoryMore(){
     itemMap.get(k).push(item);
   }
 
+  const monthTotal=monthNotes.reduce((s,n)=>s+num(n.valor_total),0);
+
   return `
     <button class="more-back" data-more-back>‹ Voltar</button>
     <section class="section">
-      <div class="section-head"><div class="section-title">🧾 Histórico de compras</div><div class="section-note">${state.notas.length} notas</div></div>
+      <div class="section-head">
+        <div>
+          <div class="section-title">🧾 Histórico de compras</div>
+          <div class="section-note">${monthNotes.length} notas • ${money(monthTotal)}</div>
+        </div>
+        ${monthSelectorHTML("history-month-selector")}
+      </div>
       <input class="more-search" id="more-search" value="${escapeHtml(state.moreSearch)}" placeholder="Buscar loja, data ou chave">
       <div class="more-grid">
         ${filtered.map(n=>{
@@ -2907,11 +2941,10 @@ function purchaseHistoryMore(){
             </button>
             ${open?`<div class="purchase-items">${items.map(i=>`<div class="purchase-item"><div>${escapeHtml(i.produto)}<small>${num(i.quantidade)} ${escapeHtml(i.unidade||"")} × ${money(i.preco_unitario)}</small></div><strong>${money(i.valor_total)}</strong></div>`).join("")}<div class="purchase-item"><div><b>Chave</b><small>${escapeHtml(n.chave||"—")}</small></div></div></div>`:""}
           </article>`;
-        }).join("") || `<div class="vehicle-empty">Nenhuma compra encontrada.</div>`}
+        }).join("") || `<div class="vehicle-empty">Nenhuma compra encontrada em ${escapeHtml(monthLabel(selected))}.</div>`}
       </div>
     </section>`;
 }
-
 function smartProductsMore(){
   const productOptions=state.products.slice().sort((a,b)=>a.name.localeCompare(b.name,"pt-BR"));
   const normalAliases=state.userAliases.filter(x=>x.tipo!=="fusao");
@@ -3240,10 +3273,24 @@ function bindView(){
     btn.addEventListener("click",()=>deleteWishlistItem(btn.dataset.wishDelete));
   });
 
-  document.querySelector("#market-mode-toggle")?.addEventListener("click",()=>{
-    state.marketMode = !state.marketMode;
-    render();
-  });
+  const marketToggle=document.querySelector("#market-mode-toggle");
+  if(marketToggle){
+    const toggleMarket=(ev)=>{
+      if(ev?.type==="pointerup" && ev.pointerType==="mouse") return;
+      if(ev?.type==="click" && marketToggle.dataset.touchHandled==="1"){
+        marketToggle.dataset.touchHandled="0";
+        return;
+      }
+      if(ev?.type==="pointerup"){
+        marketToggle.dataset.touchHandled="1";
+        ev.preventDefault();
+      }
+      state.marketMode=!state.marketMode;
+      render();
+    };
+    marketToggle.addEventListener("pointerup",toggleMarket,{passive:false});
+    marketToggle.addEventListener("click",toggleMarket);
+  }
 
 
   document.querySelector("#retry-list")?.addEventListener("click",async()=>{
@@ -3336,7 +3383,7 @@ function bindView(){
 
   document.querySelectorAll("[data-upload-product]").forEach(btn=>{
     btn.addEventListener("click", async ()=>{
-      await chooseProductImage(btn.dataset.uploadProduct);
+      await chooseProductImage(btn.dataset.uploadProduct,"camera");
     });
   });
 
@@ -3368,6 +3415,15 @@ function bindView(){
 
   document.querySelectorAll("[data-collapse]").forEach(btn=>{
     btn.addEventListener("click",()=>btn.closest(".collapse").classList.toggle("open"));
+  });
+
+
+  ["#home-month-selector","#history-month-selector"].forEach(sel=>{
+    document.querySelector(sel)?.addEventListener("change",e=>{
+      state.selectedMonth=e.target.value;
+      state.moreNoteId=null;
+      render();
+    });
   });
 
   document.querySelectorAll("[data-product]").forEach(btn=>{
@@ -3449,7 +3505,8 @@ function openProduct(p){
     ${chart}
     <div class="sheet-actions">
       <button class="secondary" id="sheet-category">🏷️ Categoria: ${p.category}${p.categoryManual ? " • manual" : " • automática"}</button>
-      <button class="secondary" id="sheet-upload-image">🖼️ ${p.imageUrl ? "Trocar imagem" : "Adicionar imagem"}</button>
+      <button class="secondary" id="sheet-camera-image">📷 Tirar foto</button>
+      <button class="secondary" id="sheet-upload-image">🖼️ ${p.imageUrl ? "Galeria / trocar" : "Escolher da galeria"}</button>
 <button class="secondary" id="sheet-family">🔗 Família: ${escapeHtml(replenishmentFamily(p))}</button>
       <button class="secondary" id="sheet-monitor-replenishment">${p.monitorReplenishment === false ? "🔕 Não monitorado" : "🔔 Monitorar reposição"}</button>
       <button class="secondary" id="sheet-add-wishlist">❤️ Comprar depois</button>
@@ -3459,7 +3516,8 @@ function openProduct(p){
   sheet.querySelector("[data-close]").addEventListener("click",closeProduct);
   sheet.querySelector("#sheet-add-list")?.addEventListener("click",()=>addProductToList(p));
   sheet.querySelector("#sheet-add-wishlist")?.addEventListener("click",()=>addProductToWishlist(p));
-  sheet.querySelector("#sheet-upload-image")?.addEventListener("click",()=>chooseProductImage(p));
+  sheet.querySelector("#sheet-camera-image")?.addEventListener("click",()=>chooseProductImage(p,"camera"));
+  sheet.querySelector("#sheet-upload-image")?.addEventListener("click",()=>chooseProductImage(p,"gallery"));
   sheet.querySelector("#sheet-category")?.addEventListener("click",()=>changeProductCategory(p));
   sheet.querySelector("#sheet-family")?.addEventListener("click",()=>changeReplenishmentFamily(p));
   sheet.querySelector("#sheet-monitor-replenishment")?.addEventListener("click",()=>setFamilyMonitoring(p,p.monitorReplenishment === false));
