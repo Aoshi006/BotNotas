@@ -1,0 +1,7 @@
+<resources>
+    <color name="prisma_bg">#07101D</color>
+    <color name="prisma_card">#101A2D</color>
+    <color name="prisma_teal">#20E0D1</color>
+    <color name="prisma_text">#FFFFFF</color>
+    <color name="prisma_muted">#91A5BF</color>
+</resources>

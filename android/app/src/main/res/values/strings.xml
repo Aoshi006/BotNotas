@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Prisma</string>
+    <string name="widget_summary_desc">Resumo do Prisma</string>
+    <string name="widget_list_desc">Lista de compras do Prisma</string>
+</resources>

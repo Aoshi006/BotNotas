@@ -1250,6 +1250,41 @@ async function logout(){
   await supabase.auth.signOut();
 }
 
+
+function syncAndroidWidgets(){
+  try{
+    if(!window.PrismaAndroid || typeof window.PrismaAndroid.updateWidget!=="function" || !state.session) return;
+
+    const now=new Date();
+    const key=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+    const monthTotal=state.notas
+      .filter(n=>noteMonthKey(n)===key)
+      .reduce((sum,n)=>sum+num(n.valor_total),0);
+
+    const pending=state.listItems.filter(i=>!i.no_carrinho);
+    let vehicleAlerts=0;
+    try{
+      vehicleAlerts=state.vehicleReminders
+        .map(reminderState)
+        .filter(x=>x.status!=="Em dia").length;
+    }catch(e){}
+
+    const payload={
+      monthLabel:monthLabel(key),
+      monthTotal:money(monthTotal),
+      listPending:pending.length,
+      listPicked:state.listItems.filter(i=>i.no_carrinho).length,
+      listPreview:pending.slice(0,3).map(i=>i.produto),
+      vehicleAlerts,
+      updatedAt:`Atualizado ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`
+    };
+
+    window.PrismaAndroid.updateWidget(JSON.stringify(payload));
+  }catch(err){
+    console.warn("Prisma Android widget:",err);
+  }
+}
+
 function render(){
   if(!configured){
     navButtons.forEach(b=>b.classList.toggle("active",b.dataset.page===state.page));
@@ -1279,6 +1314,7 @@ function render(){
   view.innerHTML = ({home, list:shoppingList, products, fuel, more})[state.page]();
   updateTopUser();
   bindView();
+  syncAndroidWidgets();
 }
 function escapeHtml(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 
@@ -2219,6 +2255,7 @@ async function loadVehicleData(){
 
   state.vehicleLoading = false;
   state.vehicleLoaded = true;
+  syncAndroidWidgets();
 }
 
 async function seedKnownVehicleHistory(vehicleId){
