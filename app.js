@@ -37,6 +37,7 @@ const state = {
   obdSessions: [],
   vehicleTab: "summary",
   vehicleLoading: false,
+  vehicleLoaded: false,
   vehicleError: null,
   userAliases: [],
   moreSection: "main",
@@ -620,6 +621,7 @@ async function init(){
       state.vehicleReminders = [];
       state.obdSessions = [];
       state.vehicleError = null;
+      state.vehicleLoaded = false;
       state.userAliases = [];
       state.moreSection = "main";
       state.moreSearch = "";
@@ -681,14 +683,9 @@ async function loadData(){
     state.notificationDismissals = new Set((notificationRes.data || []).map(x=>String(x.chave)));
     buildProducts();
 
-    // O módulo Veículo é isolado: se faltar a migração dele,
-    // Compras e Produtos continuam funcionando normalmente.
-    try{
-      await loadVehicleData();
-    }catch(vehicleErr){
-      console.error("Prisma vehicle load:", vehicleErr);
-      state.vehicleError = vehicleErr?.message || String(vehicleErr);
-    }
+    // Lista e Veículo são pré-carregados em segundo plano.
+    // Assim a Home aparece logo e, depois, trocar de aba fica praticamente instantâneo.
+    queueBackgroundPreload();
 
   }catch(err){
     console.error("Prisma loadData:", err);
@@ -700,6 +697,51 @@ async function loadData(){
 }
 
 
+
+let backgroundPreloadPromise=null;
+
+function queueBackgroundPreload(){
+  if(backgroundPreloadPromise || !state.session) return;
+
+  backgroundPreloadPromise=(async()=>{
+    const jobs=[];
+
+    if(!state.listLoaded && !state.listLoading){
+      jobs.push((async()=>{
+        state.listLoading=true;
+        try{
+          const err=await loadShoppingList();
+          if(err) throw new Error(err);
+          state.listLoaded=true;
+          state.listError=null;
+        }catch(err){
+          console.error("Prisma preload Lista:",err);
+          state.listError=err?.message||String(err);
+        }finally{
+          state.listLoading=false;
+          if(state.page==="list") render();
+        }
+      })());
+    }
+
+    if(!state.vehicleLoaded && !state.vehicleLoading){
+      jobs.push((async()=>{
+        try{
+          await loadVehicleData();
+          state.vehicleLoaded=true;
+        }catch(err){
+          console.error("Prisma preload Veículo:",err);
+          state.vehicleError=err?.message||String(err);
+        }finally{
+          if(state.page==="fuel") render();
+        }
+      })());
+    }
+
+    await Promise.allSettled(jobs);
+  })().finally(()=>{backgroundPreloadPromise=null;});
+}
+
 function withTimeout(promise, ms, label){
   let timer;
   const timeout = new Promise((_, reject)=>{
@@ -709,26 +751,34 @@ function withTimeout(promise, ms, label){
 }
 
 async function openListPage(){
-  state.page = "list";
-  state.listError = null;
+  state.page="list";
+  state.listError=null;
 
-  if(state.listLoaded){
+  // Se já temos a lista em memória, abre imediatamente.
+  if(state.listLoaded || state.activeList){
+    render();
+    if(!state.listLoaded) queueBackgroundPreload();
+    return;
+  }
+
+  // Se o preload já está em andamento, não dispara outra consulta.
+  if(state.listLoading){
     render();
     return;
   }
 
-  state.listLoading = true;
+  state.listLoading=true;
   render();
 
   try{
-    const err = await withTimeout(loadShoppingList(), 12000, "A leitura da Lista no Supabase");
+    const err=await withTimeout(loadShoppingList(),12000,"A leitura da Lista no Supabase");
     if(err) throw new Error(err);
-    state.listLoaded = true;
+    state.listLoaded=true;
   }catch(e){
-    console.error("Prisma Lista:", e);
-    state.listError = e?.message || String(e);
+    console.error("Prisma Lista:",e);
+    state.listError=e?.message||String(e);
   }finally{
-    state.listLoading = false;
+    state.listLoading=false;
     render();
   }
 }
@@ -811,7 +861,6 @@ async function addProductToList(product){
       await updateListItem(existing.id,{quantidade:num(existing.quantidade||1)+1},false);
     }
     state.page="list";
-    await loadShoppingList();
     render();
     closeProduct();
     return;
@@ -828,13 +877,20 @@ async function addProductToList(product){
     no_carrinho: false
   };
 
-  const { error } = await supabase.from("lista_itens").insert(payload);
+  const { data: inserted, error } = await supabase
+    .from("lista_itens")
+    .insert(payload)
+    .select("id,lista_id,produto,unidade,quantidade,peso_kg,preco_previsto,preco_atual,no_carrinho,criado_em")
+    .single();
+
   if(error){
     alert("Não foi possível adicionar: " + error.message);
     return;
   }
+
+  if(inserted) state.listItems.push(inserted);
+  state.listLoaded=true;
   state.page="list";
-  await loadShoppingList();
   render();
   closeProduct();
 }
@@ -1863,7 +1919,32 @@ function shoppingItem(item){
 
 
 function parseDecimal(v){
-  const n = Number(String(v ?? "").trim().replace(/\./g,"").replace(",","."));
+  let s = String(v ?? "").trim().replace(/\s/g,"").replace(/R\$/gi,"");
+  if(!s) return null;
+
+  const comma = s.lastIndexOf(",");
+  const dot = s.lastIndexOf(".");
+
+  if(comma >= 0 && dot >= 0){
+    // O último separador é tratado como decimal.
+    if(comma > dot){
+      s = s.replace(/\./g,"").replace(",",".");
+    }else{
+      s = s.replace(/,/g,"");
+    }
+  }else if(comma >= 0){
+    s = s.replace(/\./g,"").replace(",",".");
+  }else{
+    // Com apenas ponto, preserva como decimal. Ex.: input type=number retorna 6.59.
+    const dots = (s.match(/\./g)||[]).length;
+    if(dots > 1){
+      const last = s.lastIndexOf(".");
+      s = s.slice(0,last).replace(/\./g,"") + "." + s.slice(last+1);
+    }
+  }
+
+  s = s.replace(/[^0-9.+-]/g,"");
+  const n = Number(s);
   return Number.isFinite(n) ? n : null;
 }
 
@@ -1975,6 +2056,7 @@ async function loadVehicleData(){
   if(imported>0) await refreshFuelings();
 
   state.vehicleLoading = false;
+  state.vehicleLoaded = true;
 }
 
 async function seedKnownVehicleHistory(vehicleId){
@@ -2251,11 +2333,20 @@ function latestFuelPrice(type){
   return rows.length ? num(rows[0].preco_litro) : 0;
 }
 
+function normalizeStoredFuelPrice(value){
+  const n=num(value);
+  // Corrige automaticamente o bug antigo: 6,59 tinha sido salvo como 659.
+  if(n>=100 && n<10000) return n/100;
+  return n;
+}
+
 function flexStoredGas(){
-  return num(state.vehicle?.preco_gasolina_flex)>0 ? num(state.vehicle.preco_gasolina_flex) : (latestFuelPrice("Gasolina")||5.99);
+  const saved=normalizeStoredFuelPrice(state.vehicle?.preco_gasolina_flex);
+  return saved>0 ? saved : (latestFuelPrice("Gasolina")||5.99);
 }
 function flexStoredEth(){
-  return num(state.vehicle?.preco_etanol_flex)>0 ? num(state.vehicle.preco_etanol_flex) : (latestFuelPrice("Etanol")||4.10);
+  const saved=normalizeStoredFuelPrice(state.vehicle?.preco_etanol_flex);
+  return saved>0 ? saved : (latestFuelPrice("Etanol")||4.10);
 }
 
 async function saveFlexPrices(){
@@ -2263,6 +2354,11 @@ async function saveFlexPrices(){
   const gas=parseDecimal(document.querySelector("#gas")?.value);
   const eth=parseDecimal(document.querySelector("#eth")?.value);
   if(!(gas>0) || !(eth>0)) return;
+
+  // Mantém a interface responsiva mesmo com internet lenta.
+  state.vehicle.preco_gasolina_flex=gas;
+  state.vehicle.preco_etanol_flex=eth;
+
   const {data,error}=await supabase.from("veiculos")
     .update({preco_gasolina_flex:gas,preco_etanol_flex:eth,atualizado_em:new Date().toISOString()})
     .eq("id",state.vehicle.id)
@@ -3474,6 +3570,45 @@ function updateFlex(){
 
 
 
+
+async function deleteLibraryProduct(product){
+  if(!product) return;
+
+  if((product.history||[]).length>0){
+    alert(
+      "Esse produto possui histórico real vindo de nota fiscal.\\n\\n" +
+      "O Prisma protege esse histórico e não permite apagar o produto por aqui. " +
+      "Você ainda pode alterar nome/fusão, categoria, família, imagem e monitoramento."
+    );
+    return;
+  }
+
+  const row=state.productRows.find(r=>String(r.id)===String(product.id))
+    || state.productRows.find(r=>searchNorm(r.nome)===searchNorm(product.name));
+
+  if(!row){
+    alert("Esse produto não possui um cadastro independente para excluir.");
+    return;
+  }
+
+  const ok=confirm(
+    `Excluir "${product.name}" do Prisma?\\n\\n` +
+    "Ele não possui histórico de nota fiscal. Esta ação remove o cadastro da biblioteca."
+  );
+  if(!ok) return;
+
+  const {error}=await supabase.from("produtos").delete().eq("id",row.id);
+  if(error){
+    alert("Não foi possível excluir o produto: "+error.message);
+    return;
+  }
+
+  state.productRows=state.productRows.filter(r=>String(r.id)!==String(row.id));
+  buildProducts();
+  closeProduct();
+  render();
+}
+
 function openProduct(p){
   backdrop.classList.remove("hidden");
   sheet.classList.remove("hidden");
@@ -3511,6 +3646,7 @@ function openProduct(p){
       <button class="secondary" id="sheet-monitor-replenishment">${p.monitorReplenishment === false ? "🔕 Não monitorado" : "🔔 Monitorar reposição"}</button>
       <button class="secondary" id="sheet-add-wishlist">❤️ Comprar depois</button>
       <button class="primary full" id="sheet-add-list">🛒 Adicionar à lista</button>
+      <button class="danger-product full" id="sheet-delete-product">🗑 Excluir produto</button>
     </div>`;
 
   sheet.querySelector("[data-close]").addEventListener("click",closeProduct);
@@ -3521,6 +3657,7 @@ function openProduct(p){
   sheet.querySelector("#sheet-category")?.addEventListener("click",()=>changeProductCategory(p));
   sheet.querySelector("#sheet-family")?.addEventListener("click",()=>changeReplenishmentFamily(p));
   sheet.querySelector("#sheet-monitor-replenishment")?.addEventListener("click",()=>setFamilyMonitoring(p,p.monitorReplenishment === false));
+  sheet.querySelector("#sheet-delete-product")?.addEventListener("click",()=>deleteLibraryProduct(p));
 }
 function closeProduct(){backdrop.classList.add("hidden");sheet.classList.add("hidden");}
 backdrop.addEventListener("click",closeProduct);
@@ -3536,11 +3673,27 @@ navButtons.forEach(btn=>btn.addEventListener("click",async()=>{
   }
 
   if(btn.dataset.page === "fuel"){
-    state.page = "fuel";
+    state.page="fuel";
+
+    if(state.vehicleLoaded || state.vehicle){
+      render();
+      if(!state.vehicleLoaded) queueBackgroundPreload();
+      return;
+    }
+
+    if(state.vehicleLoading){
+      render();
+      return;
+    }
+
+    state.vehicleLoading=true;
+    render();
     try{
       await loadVehicleData();
+      state.vehicleLoaded=true;
     }catch(err){
-      state.vehicleError = err?.message || String(err);
+      state.vehicleError=err?.message||String(err);
+      state.vehicleLoading=false;
     }
     render();
     return;

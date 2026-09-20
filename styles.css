@@ -652,3 +652,25 @@ button{cursor:pointer}
   }
 }
 
+
+/* === PRISMA - performance + excluir produto === */
+.danger-product{
+  min-height:44px;
+  border-radius:14px;
+  border:1px solid rgba(255,91,111,.20);
+  background:rgba(255,91,111,.06);
+  color:#ff8194;
+  font:inherit;
+  font-size:9px;
+  font-weight:950;
+}
+.danger-product:active{transform:scale(.985)}
+
+.loading{
+  animation:prismaLoadingFade .7s ease-in-out infinite alternate;
+}
+@keyframes prismaLoadingFade{
+  from{opacity:.55}
+  to{opacity:1}
+}
+
