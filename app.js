@@ -1572,9 +1572,11 @@ function shoppingList(){
   const pending = state.listItems.filter(i=>!i.no_carrinho).length;
   const inCart = state.listItems.filter(i=>i.no_carrinho).length;
 
-  const q = state.listSearch.trim().toLowerCase();
+  const rawQ = state.listSearch.trim();
+  const q = rawQ.toLowerCase();
+
   const availableProducts = state.products
-    .filter(p=>!state.listItems.some(i=>norm(i.produto).toLowerCase()===norm(p.name).toLowerCase()));
+    .filter(p=>!state.listItems.some(i=>searchNorm(i.produto)===searchNorm(p.name)));
 
   const candidates = availableProducts
     .filter(p=>smartMatch(p,q))
@@ -1583,6 +1585,16 @@ function shoppingList(){
       return (b.history?.length||0) - (a.history?.length||0);
     })
     .slice(0, q ? 12 : 4);
+
+  const exactInLibrary = rawQ
+    ? state.products.some(p=>searchNorm(p.name)===searchNorm(rawQ))
+    : false;
+
+  const exactInList = rawQ
+    ? state.listItems.some(i=>searchNorm(i.produto)===searchNorm(rawQ))
+    : false;
+
+  const showCustomAdd = Boolean(rawQ && !exactInLibrary && !exactInList);
 
   return `
     <section class="hero list-summary">
@@ -1601,13 +1613,27 @@ function shoppingList(){
       </div>
       <input id="list-search" class="search" placeholder="🔎 Digite arroz, leite, batata..." value="${escapeHtml(state.listSearch)}">
       ${!q ? `<div class="search-hint">Mais comprados recentemente</div>` : ""}
+      ${showCustomAdd ? `
+        <div class="custom-list-add-wrap">
+          <div class="custom-list-add-copy">
+            <span class="quick-photo custom-list-icon">＋</span>
+            <span>
+              <b>Adicionar “${escapeHtml(rawQ)}”</b>
+              <small>Ainda não comprado • escolha como deseja comprar</small>
+            </span>
+          </div>
+          <div class="custom-list-unit-actions">
+            <button data-add-custom-list="${escapeHtml(rawQ)}" data-custom-unit="UN">UN</button>
+            <button data-add-custom-list="${escapeHtml(rawQ)}" data-custom-unit="KG">KG</button>
+          </div>
+        </div>` : ""}
       <div class="quick-add-grid">
         ${candidates.map(p=>`
           <button class="quick-add" data-add-list="${p.id}">
             ${photoMarkup(p, "quick-photo")}
             <span><b>${escapeHtml(p.name)}</b><small>${money(p.price)}${isKg(p.unit)?"/kg":""} • ${escapeHtml(p.unit||"")}</small></span>
             <strong>＋</strong>
-          </button>`).join("") || `<div class="card-sub">Nenhum produto encontrado.</div>`}
+          </button>`).join("") || (!showCustomAdd ? `<div class="card-sub">Nenhum produto encontrado.</div>` : "")}
       </div>
     </section>
 
@@ -1663,7 +1689,12 @@ function shoppingItem(item){
       ${photoMarkup({name:item.produto, unit:item.unidade, icon, imageUrl}, "shopping-photo")}
       <div>
         <div class="shopping-name">${escapeHtml(item.produto.toUpperCase())}</div>
-        <div class="shopping-last">Último ${money(predicted)}${kg?"/kg":""} • ${escapeHtml(item.unidade||"")}</div>
+        <div class="shopping-last">${product && predicted>0 ? `Último ${money(predicted)}${kg?"/kg":""} • ${escapeHtml(item.unidade||"")}` : `Sem histórico de preço • ${escapeHtml(item.unidade||"UN")}`}</div>
+        ${!product ? (()=>{ const links=possibleLinksForManualItem(item); return links.length ? `
+          <div class="manual-link-box">
+            <span>Produto parecido encontrado no histórico:</span>
+            ${links.map(p=>`<button data-link-manual-item="${item.id}" data-link-product="${p.id}">Vincular a ${escapeHtml(p.name)}</button>`).join("")}
+          </div>` : ""; })() : ""}
       </div>
       <div class="shopping-actions-top">
         <button class="image-mini-btn" data-upload-product="${escapeHtml(item.produto)}" title="Adicionar ou trocar imagem">🖼️</button>
@@ -3130,6 +3161,23 @@ function bindView(){
     btn.addEventListener("click",async()=>{
       const p=state.products.find(x=>String(x.id)===String(btn.dataset.addList));
       if(p) await addProductToList(p);
+    });
+  });
+
+  document.querySelectorAll("[data-add-custom-list]").forEach(btn=>{
+    btn.addEventListener("click",async()=>{
+      await addCustomItemToList(
+        btn.dataset.addCustomList,
+        btn.dataset.customUnit
+      );
+    });
+  });
+
+  document.querySelectorAll("[data-link-manual-item]").forEach(btn=>{
+    btn.addEventListener("click",async()=>{
+      const item=state.listItems.find(x=>String(x.id)===String(btn.dataset.linkManualItem));
+      const product=state.products.find(x=>String(x.id)===String(btn.dataset.linkProduct));
+      if(item && product) await linkManualListItem(item,product);
     });
   });
 

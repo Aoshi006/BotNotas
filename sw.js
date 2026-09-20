@@ -1,9 +1,9 @@
-const CACHE="prisma-web-v2026-09-19-1944";
+const CACHE="prisma-web-v2026-09-20-lista-vinculo";
 const ASSETS=[
   "./",
   "./index.html",
-  "./styles.css?v=20260919-1944",
-  "./app.js?v=20260919-1944",
+  "./styles.css?v=20260920-lista-vinculo",
+  "./app.js?v=20260920-lista-vinculo",
   "./config.js",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
@@ -14,14 +14,12 @@ self.addEventListener("install",event=>{
   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).catch(()=>{}));
   self.skipWaiting();
 });
-
 self.addEventListener("activate",event=>{
   event.waitUntil(caches.keys().then(keys=>Promise.all(
     keys.filter(key=>key!==CACHE).map(key=>caches.delete(key))
   )));
   self.clients.claim();
 });
-
 self.addEventListener("fetch",event=>{
   const url=new URL(event.request.url);
   if(url.origin!==self.location.origin) return;
